@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0">
+
+    <title>Dividend Finder</title>
+
+    <link
+            rel="stylesheet"
+            href="css/style.css">
+
+</head>
+
+<body>
+
+<div
+        id="pullRefresh"
+        class="pull-refresh">
+
+    <span id="pullRefreshIcon">↓</span>
+
+    <span id="pullRefreshText">
+        Pull to refresh
+    </span>
+
+</div>
+
+
+<div class="app">
+
+    <div class="sticky-header">
+
+        <div class="search-card">
+
+            <div
+                    class="search-summary"
+                    id="searchSummary">
+
+                <div class="summary-content">
+
+                    <div
+                            class="date-summary"
+                            id="dateSummary">
+                        Select dates
+                    </div>
+
+                    <div
+                            class="investment-summary hidden"
+                            id="investmentSummary">
+                    </div>
+
+                </div>
+
+
+                <button
+                        class="edit-button"
+                        id="editButton"
+                        type="button">
+
+                    ✎
+
+                </button>
+
+            </div>
+
+
+            <div
+                    class="search-form"
+                    id="searchForm">
+
+                <div class="form-title">
+                    Search Dividends
+                </div>
+
+
+                <div class="field">
+
+                    <label for="fromDate">
+                        From Date
+                    </label>
+
+                    <div class="date-input-wrapper">
+
+                        <input
+                                type="date"
+                                id="fromDate">
+
+                        <span
+                                class="date-display"
+                                id="fromDateDisplay">
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="toDate">
+                        To Date
+                    </label>
+
+                    <div class="date-input-wrapper">
+
+                        <input
+                                type="date"
+                                id="toDate">
+
+                        <span
+                                class="date-display"
+                                id="toDateDisplay">
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="investmentAmount">
+                        Investment Amount
+                    </label>
+
+                    <input
+                            type="number"
+                            id="investmentAmount"
+                            min="1"
+                            placeholder="Enter investment amount">
+
+                </div>
+
+
+                <div
+                        id="filterError"
+                        class="filter-error hidden">
+                </div>
+
+
+                <button
+                        class="search-button"
+                        id="searchButton"
+                        type="button">
+
+                    Search
+
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <main>
+
+        <div class="page-header">
+
+            <div class="page-header-top">
+
+                <h1>
+                    Upcoming Dividends
+                </h1>
+
+
+                <select
+                        id="sortFilter"
+                        class="sort-filter">
+
+                    <option value="expectedDesc">
+                        Select Filter
+                    </option>
+
+                    <option value="dateAsc">
+                        Date: Latest
+                    </option>
+
+                    <option value="dividendDesc">
+                        Dividend: High
+                    </option>
+
+                    <option value="dividendAsc">
+                        Dividend: Low
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <p id="resultMessage">
+                Sort by Dividend: High to Low
+            </p>
+
+        </div>
+
+
+        <div
+                id="loading"
+                class="loading hidden">
+
+            Finding upcoming dividends...
+
+        </div>
+
+
+        <div
+                id="error"
+                class="error hidden">
+        </div>
+
+
+        <div
+                id="empty"
+                class="empty hidden">
+
+            No upcoming dividends found.
+
+        </div>
+
+
+        <div
+                id="stockList"
+                class="stock-list">
+        </div>
+
+
+        <div class="ai-message">
+
+            People say AI will take our jobs. I say, without AI, my job might take me out first. 😂
+
+        </div>
+
+    </main>
+
+</div>
+
+
+<script src="js/app.js"></script>
+
+</body>
+
+</html>
