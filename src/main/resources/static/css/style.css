@@ -484,7 +484,7 @@ body {
 
 .main-result {
     display: grid;
-    grid-template-columns: 7fr 3fr;
+    grid-template-columns: 6.3fr 3.7fr;
     gap: 7px;
     margin-top: 11px;
 }
