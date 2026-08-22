@@ -676,6 +676,33 @@ body {
     font-weight: 650;
     color: #929baa;
 }
+/* MOBILE ONLY MESSAGE */
+
+.mobile-only-message {
+    display: none;
+}
+
+@media (max-width: 699px) {
+
+    .mobile-only-message {
+        display: block;
+
+        padding: 0 20px 25px;
+
+        text-align: center;
+
+        color: #a5adbb;
+
+        font-size: 11px;
+        line-height: 1.5;
+        font-weight: 500;
+    }
+
+    .mobile-only-message strong {
+        font-weight: 750;
+        color: #929baa;
+    }
+}
 
 
 /* MOBILE */
