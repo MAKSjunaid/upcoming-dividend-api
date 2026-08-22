@@ -64,6 +64,9 @@ const stickyHeader =
 const pageHeader =
     document.querySelector(".page-header");
 
+const aiMessage =
+    document.querySelector(".ai-message");
+
 
 let dividendData = [];
 
@@ -71,109 +74,6 @@ let currentInvestment = null;
 
 let currentSort = "expectedDesc";
 
-
-/* MOBILE BOTTOM MESSAGE */
-
-const mobileBottomMessage =
-    document.createElement("div");
-
-mobileBottomMessage.className =
-    "mobile-only-bottom-message";
-
-mobileBottomMessage.innerHTML = `
-    It started with a simple question:
-    “What is a dividend, and where can I find upcoming dividends with ex-dates?”
-    I knew nothing about Git, HTML, CSS, APIs, or deployment.
-    One day later, that question became a fully functional web application anyone can use.
-    From scratch to something real.
-    <strong>Take the challenge. Build it.</strong>
-`;
-
-mobileBottomMessage.style.display =
-    "none";
-
-mobileBottomMessage.style.padding =
-    "0 20px 25px";
-
-mobileBottomMessage.style.textAlign =
-    "center";
-
-mobileBottomMessage.style.color =
-    "#a5adbb";
-
-mobileBottomMessage.style.fontSize =
-    "11px";
-
-mobileBottomMessage.style.lineHeight =
-    "1.4";
-
-mobileBottomMessage.style.fontWeight =
-    "500";
-
-mobileBottomMessage.querySelector(
-    "strong"
-).style.fontWeight = "650";
-
-mobileBottomMessage.querySelector(
-    "strong"
-).style.color = "#929baa";
-
-
-const aiMessage =
-    document.querySelector(".ai-message");
-
-if (aiMessage) {
-
-    aiMessage.insertAdjacentElement(
-        "afterend",
-        mobileBottomMessage
-    );
-}
-
-
-function isMobileDevice() {
-
-    return window.matchMedia(
-        "(max-width: 699px)"
-    ).matches;
-}
-
-
-function isAtBottom() {
-
-    const scrollPosition =
-        window.scrollY +
-        window.innerHeight;
-
-    const documentHeight =
-        document.documentElement.scrollHeight;
-
-    return (
-        documentHeight -
-        scrollPosition
-    ) <= 5;
-}
-
-
-function showMobileBottomMessage() {
-
-    if (!isMobileDevice()) {
-        return;
-    }
-
-    mobileBottomMessage.style.display =
-        "block";
-}
-
-
-function hideMobileBottomMessage() {
-
-    mobileBottomMessage.style.display =
-        "none";
-}
-
-
-/* STICKY HEADER */
 
 function updateStickyHeader() {
 
@@ -219,26 +119,6 @@ function updateStickyHeader() {
 window.addEventListener(
     "scroll",
     updateStickyHeader,
-    {
-        passive: true
-    }
-);
-
-
-window.addEventListener(
-    "scroll",
-    function() {
-
-        if (
-            !isAtBottom() &&
-            mobileBottomMessage.style.display ===
-            "block"
-        ) {
-
-            hideMobileBottomMessage();
-        }
-
-    },
     {
         passive: true
     }
@@ -846,9 +726,6 @@ async function searchDividends() {
         clearFilterError();
 
         closeSearchPanel();
-
-
-        hideMobileBottomMessage();
 
 
         window.scrollTo({
@@ -1572,7 +1449,7 @@ setDefaultDates();
 updateDateDisplays();
 
 
-/* PULL REFRESH */
+/* PULL TO REFRESH */
 
 let touchStartY = 0;
 
@@ -1580,20 +1457,53 @@ let pulling = false;
 
 let refreshing = false;
 
-let bottomPulling = false;
-
-let bottomPullDistance = 0;
-
 const PULL_DISTANCE = 75;
 
-const BOTTOM_PULL_DISTANCE = 55;
+
+/*
+ * The second message is ONLY allowed to appear
+ * when the user pulls down from the very top.
+ *
+ * It will NOT appear during normal scrolling.
+ */
+
+function hideChallengeMessage() {
+
+    if (aiMessage) {
+
+        aiMessage.classList.remove(
+            "pull-active"
+        );
+    }
+}
+
+
+function showChallengeMessage() {
+
+    if (
+        aiMessage &&
+        window.innerWidth <= 699 &&
+        window.scrollY <= 0
+    ) {
+
+        aiMessage.classList.add(
+            "pull-active"
+        );
+    }
+}
 
 
 document.addEventListener(
     "touchstart",
     function(event) {
 
-        if (refreshing) {
+        if (
+            refreshing ||
+            window.scrollY !== 0
+        ) {
+
+            pulling = false;
+
             return;
         }
 
@@ -1602,26 +1512,9 @@ document.addEventListener(
             event.touches[0].clientY;
 
 
-        pulling = false;
+        pulling = true;
 
-        bottomPulling = false;
-
-        bottomPullDistance = 0;
-
-
-        if (window.scrollY === 0) {
-
-            pulling = true;
-        }
-
-
-        if (
-            isMobileDevice() &&
-            isAtBottom()
-        ) {
-
-            bottomPulling = true;
-        }
+        hideChallengeMessage();
     },
     {
         passive: true
@@ -1633,7 +1526,12 @@ document.addEventListener(
     "touchmove",
     function(event) {
 
-        if (refreshing) {
+        if (
+            !pulling ||
+            refreshing ||
+            window.scrollY !== 0
+        ) {
+
             return;
         }
 
@@ -1647,87 +1545,58 @@ document.addEventListener(
             touchStartY;
 
 
-        /* TOP PULL REFRESH */
+        if (distance <= 0) {
 
-        if (
-            pulling &&
-            window.scrollY === 0
-        ) {
-
-            if (distance <= 0) {
-                return;
-            }
-
-
-            const progress =
-                Math.min(
-                    distance /
-                    PULL_DISTANCE,
-                    1
-                );
-
-
-            pullRefresh.style.transform =
-                `translate(-50%, ${-100 + (progress * 100)}%)`;
-
-
-            if (
-                distance >=
-                PULL_DISTANCE
-            ) {
-
-                pullRefreshText.textContent =
-                    "Release to refresh";
-
-                pullRefreshIcon.textContent =
-                    "↻";
-
-            } else {
-
-                pullRefreshText.textContent =
-                    "Pull to refresh";
-
-                pullRefreshIcon.textContent =
-                    "↓";
-            }
+            hideChallengeMessage();
 
             return;
         }
 
 
-        /* MOBILE BOTTOM PULL */
+        /*
+         * Show the second message only after
+         * the user has actually started pulling.
+         */
 
         if (
-            bottomPulling &&
-            isMobileDevice() &&
-            isAtBottom()
+            window.innerWidth <= 699 &&
+            distance > 10
         ) {
 
-            const upwardDistance =
-                touchStartY -
-                currentY;
+            showChallengeMessage();
+        }
 
 
-            if (
-                upwardDistance <= 0
-            ) {
-
-                return;
-            }
-
-
-            bottomPullDistance =
-                upwardDistance;
+        const progress =
+            Math.min(
+                distance /
+                PULL_DISTANCE,
+                1
+            );
 
 
-            if (
-                bottomPullDistance >=
-                BOTTOM_PULL_DISTANCE
-            ) {
+        pullRefresh.style.transform =
+            `translate(-50%, ${-100 + (progress * 100)}%)`;
 
-                showMobileBottomMessage();
 
-            }
+        if (
+            distance >=
+            PULL_DISTANCE
+        ) {
+
+            pullRefreshText.textContent =
+                "Release to refresh";
+
+            pullRefreshIcon.textContent =
+                "↻";
+
+        } else {
+
+            pullRefreshText.textContent =
+                "Pull to refresh";
+
+            pullRefreshIcon.textContent =
+                "↓";
         }
     },
     {
@@ -1740,85 +1609,61 @@ document.addEventListener(
     "touchend",
     async function(event) {
 
-        if (refreshing) {
-            return;
-        }
-
-
-        /* TOP PULL REFRESH */
-
-        if (pulling) {
-
-            const distance =
-                event.changedTouches[0].clientY -
-                touchStartY;
-
-
-            pulling = false;
-
-
-            if (
-                distance <
-                PULL_DISTANCE
-            ) {
-
-                pullRefresh.style.transform =
-                    "translate(-50%, -100%)";
-
-                return;
-            }
-
-
-            await refreshDividends();
+        if (
+            !pulling ||
+            refreshing
+        ) {
 
             return;
         }
 
 
-        /* BOTTOM PULL */
-
-        if (bottomPulling) {
-
-            const upwardDistance =
-                touchStartY -
-                event.changedTouches[0].clientY;
+        const distance =
+            event.changedTouches[0].clientY -
+            touchStartY;
 
 
-            bottomPulling = false;
+        pulling = false;
 
 
-            if (
-                upwardDistance <
-                BOTTOM_PULL_DISTANCE
-            ) {
+        /*
+         * Hide the second message when
+         * the pull gesture ends.
+         */
 
-                hideMobileBottomMessage();
-
-                return;
-            }
+        hideChallengeMessage();
 
 
-            if (
-                isMobileDevice()
-            ) {
+        if (
+            distance <
+            PULL_DISTANCE
+        ) {
 
-                showMobileBottomMessage();
+            pullRefresh.style.transform =
+                "translate(-50%, -100%)";
 
-                setTimeout(
-                    function() {
-
-                        if (
-                            !isAtBottom()
-                        ) {
-
-                            hideMobileBottomMessage();
-                        }
-
-                    },
-                    100
-                );
-            }
+            return;
         }
+
+
+        await refreshDividends();
+    },
+    {
+        passive: true
+    }
+);
+
+
+document.addEventListener(
+    "touchcancel",
+    function() {
+
+        pulling = false;
+
+        hideChallengeMessage();
+
+        pullRefresh.style.transform =
+            "translate(-50%, -100%)";
     },
     {
         passive: true
@@ -1834,6 +1679,9 @@ async function refreshDividends() {
 
 
     refreshing = true;
+
+
+    hideChallengeMessage();
 
 
     pullRefresh.classList.add(
@@ -1878,6 +1726,8 @@ async function refreshDividends() {
 
 
                 refreshing = false;
+
+                hideChallengeMessage();
 
             },
             500
