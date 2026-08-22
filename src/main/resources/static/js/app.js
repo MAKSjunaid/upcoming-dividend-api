@@ -72,6 +72,109 @@ let currentInvestment = null;
 let currentSort = "expectedDesc";
 
 
+/* MOBILE BOTTOM MESSAGE */
+
+const mobileBottomMessage =
+    document.createElement("div");
+
+mobileBottomMessage.className =
+    "mobile-only-bottom-message";
+
+mobileBottomMessage.innerHTML = `
+    It started with a simple question:
+    “What is a dividend, and where can I find upcoming dividends with ex-dates?”
+    I knew nothing about Git, HTML, CSS, APIs, or deployment.
+    One day later, that question became a fully functional web application anyone can use.
+    From scratch to something real.
+    <strong>Take the challenge. Build it.</strong>
+`;
+
+mobileBottomMessage.style.display =
+    "none";
+
+mobileBottomMessage.style.padding =
+    "0 20px 25px";
+
+mobileBottomMessage.style.textAlign =
+    "center";
+
+mobileBottomMessage.style.color =
+    "#a5adbb";
+
+mobileBottomMessage.style.fontSize =
+    "11px";
+
+mobileBottomMessage.style.lineHeight =
+    "1.4";
+
+mobileBottomMessage.style.fontWeight =
+    "500";
+
+mobileBottomMessage.querySelector(
+    "strong"
+).style.fontWeight = "650";
+
+mobileBottomMessage.querySelector(
+    "strong"
+).style.color = "#929baa";
+
+
+const aiMessage =
+    document.querySelector(".ai-message");
+
+if (aiMessage) {
+
+    aiMessage.insertAdjacentElement(
+        "afterend",
+        mobileBottomMessage
+    );
+}
+
+
+function isMobileDevice() {
+
+    return window.matchMedia(
+        "(max-width: 699px)"
+    ).matches;
+}
+
+
+function isAtBottom() {
+
+    const scrollPosition =
+        window.scrollY +
+        window.innerHeight;
+
+    const documentHeight =
+        document.documentElement.scrollHeight;
+
+    return (
+        documentHeight -
+        scrollPosition
+    ) <= 5;
+}
+
+
+function showMobileBottomMessage() {
+
+    if (!isMobileDevice()) {
+        return;
+    }
+
+    mobileBottomMessage.style.display =
+        "block";
+}
+
+
+function hideMobileBottomMessage() {
+
+    mobileBottomMessage.style.display =
+        "none";
+}
+
+
+/* STICKY HEADER */
+
 function updateStickyHeader() {
 
     const scrolled =
@@ -116,6 +219,26 @@ function updateStickyHeader() {
 window.addEventListener(
     "scroll",
     updateStickyHeader,
+    {
+        passive: true
+    }
+);
+
+
+window.addEventListener(
+    "scroll",
+    function() {
+
+        if (
+            !isAtBottom() &&
+            mobileBottomMessage.style.display ===
+            "block"
+        ) {
+
+            hideMobileBottomMessage();
+        }
+
+    },
     {
         passive: true
     }
@@ -723,6 +846,9 @@ async function searchDividends() {
         clearFilterError();
 
         closeSearchPanel();
+
+
+        hideMobileBottomMessage();
 
 
         window.scrollTo({
@@ -1446,23 +1572,28 @@ setDefaultDates();
 updateDateDisplays();
 
 
+/* PULL REFRESH */
+
 let touchStartY = 0;
 
 let pulling = false;
 
 let refreshing = false;
 
+let bottomPulling = false;
+
+let bottomPullDistance = 0;
+
 const PULL_DISTANCE = 75;
+
+const BOTTOM_PULL_DISTANCE = 55;
 
 
 document.addEventListener(
     "touchstart",
     function(event) {
 
-        if (
-            refreshing ||
-            window.scrollY !== 0
-        ) {
+        if (refreshing) {
             return;
         }
 
@@ -1471,7 +1602,26 @@ document.addEventListener(
             event.touches[0].clientY;
 
 
-        pulling = true;
+        pulling = false;
+
+        bottomPulling = false;
+
+        bottomPullDistance = 0;
+
+
+        if (window.scrollY === 0) {
+
+            pulling = true;
+        }
+
+
+        if (
+            isMobileDevice() &&
+            isAtBottom()
+        ) {
+
+            bottomPulling = true;
+        }
     },
     {
         passive: true
@@ -1483,11 +1633,7 @@ document.addEventListener(
     "touchmove",
     function(event) {
 
-        if (
-            !pulling ||
-            refreshing ||
-            window.scrollY !== 0
-        ) {
+        if (refreshing) {
             return;
         }
 
@@ -1501,41 +1647,87 @@ document.addEventListener(
             touchStartY;
 
 
-        if (distance <= 0) {
+        /* TOP PULL REFRESH */
+
+        if (
+            pulling &&
+            window.scrollY === 0
+        ) {
+
+            if (distance <= 0) {
+                return;
+            }
+
+
+            const progress =
+                Math.min(
+                    distance /
+                    PULL_DISTANCE,
+                    1
+                );
+
+
+            pullRefresh.style.transform =
+                `translate(-50%, ${-100 + (progress * 100)}%)`;
+
+
+            if (
+                distance >=
+                PULL_DISTANCE
+            ) {
+
+                pullRefreshText.textContent =
+                    "Release to refresh";
+
+                pullRefreshIcon.textContent =
+                    "↻";
+
+            } else {
+
+                pullRefreshText.textContent =
+                    "Pull to refresh";
+
+                pullRefreshIcon.textContent =
+                    "↓";
+            }
+
             return;
         }
 
 
-        const progress =
-            Math.min(
-                distance /
-                PULL_DISTANCE,
-                1
-            );
-
-
-        pullRefresh.style.transform =
-            `translate(-50%, ${-100 + (progress * 100)}%)`;
-
+        /* MOBILE BOTTOM PULL */
 
         if (
-            distance >=
-            PULL_DISTANCE
+            bottomPulling &&
+            isMobileDevice() &&
+            isAtBottom()
         ) {
 
-            pullRefreshText.textContent =
-                "Release to refresh";
+            const upwardDistance =
+                touchStartY -
+                currentY;
 
-            pullRefreshIcon.textContent =
-                "↻";
 
-        } else {
+            if (
+                upwardDistance <= 0
+            ) {
 
-            pullRefreshText.textContent =
-                "Pull to refresh";
+                return;
+            }
 
-            pullRefreshIcon.textContent =
-                "↓";
+
+            bottomPullDistance =
+                upwardDistance;
+
+
+            if (
+                bottomPullDistance >=
+                BOTTOM_PULL_DISTANCE
+            ) {
+
+                showMobileBottomMessage();
+
+            }
         }
     },
     {
@@ -1548,35 +1740,85 @@ document.addEventListener(
     "touchend",
     async function(event) {
 
-        if (
-            !pulling ||
-            refreshing
-        ) {
+        if (refreshing) {
             return;
         }
 
 
-        const distance =
-            event.changedTouches[0].clientY -
-            touchStartY;
+        /* TOP PULL REFRESH */
+
+        if (pulling) {
+
+            const distance =
+                event.changedTouches[0].clientY -
+                touchStartY;
 
 
-        pulling = false;
+            pulling = false;
 
 
-        if (
-            distance <
-            PULL_DISTANCE
-        ) {
+            if (
+                distance <
+                PULL_DISTANCE
+            ) {
 
-            pullRefresh.style.transform =
-                "translate(-50%, -100%)";
+                pullRefresh.style.transform =
+                    "translate(-50%, -100%)";
+
+                return;
+            }
+
+
+            await refreshDividends();
 
             return;
         }
 
 
-        await refreshDividends();
+        /* BOTTOM PULL */
+
+        if (bottomPulling) {
+
+            const upwardDistance =
+                touchStartY -
+                event.changedTouches[0].clientY;
+
+
+            bottomPulling = false;
+
+
+            if (
+                upwardDistance <
+                BOTTOM_PULL_DISTANCE
+            ) {
+
+                hideMobileBottomMessage();
+
+                return;
+            }
+
+
+            if (
+                isMobileDevice()
+            ) {
+
+                showMobileBottomMessage();
+
+                setTimeout(
+                    function() {
+
+                        if (
+                            !isAtBottom()
+                        ) {
+
+                            hideMobileBottomMessage();
+                        }
+
+                    },
+                    100
+                );
+            }
+        }
     },
     {
         passive: true
