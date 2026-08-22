@@ -694,12 +694,12 @@ body {
         color: #a5adbb;
 
         font-size: 11px;
-        line-height: 1.5;
+        line-height: 1.4;
         font-weight: 500;
     }
 
     .mobile-only-message strong {
-        font-weight: 750;
+        font-weight: 650;
         color: #929baa;
     }
 }
