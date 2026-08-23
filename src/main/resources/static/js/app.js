@@ -64,9 +64,6 @@ const stickyHeader =
 const pageHeader =
     document.querySelector(".page-header");
 
-const aiMessage =
-    document.querySelector(".ai-message");
-
 
 let dividendData = [];
 
@@ -1449,8 +1446,6 @@ setDefaultDates();
 updateDateDisplays();
 
 
-/* PULL TO REFRESH */
-
 let touchStartY = 0;
 
 let pulling = false;
@@ -1458,39 +1453,6 @@ let pulling = false;
 let refreshing = false;
 
 const PULL_DISTANCE = 75;
-
-
-/*
- * The second message is ONLY allowed to appear
- * when the user pulls down from the very top.
- *
- * It will NOT appear during normal scrolling.
- */
-
-function hideChallengeMessage() {
-
-    if (aiMessage) {
-
-        aiMessage.classList.remove(
-            "pull-active"
-        );
-    }
-}
-
-
-function showChallengeMessage() {
-
-    if (
-        aiMessage &&
-        window.innerWidth <= 699 &&
-        window.scrollY <= 0
-    ) {
-
-        aiMessage.classList.add(
-            "pull-active"
-        );
-    }
-}
 
 
 document.addEventListener(
@@ -1501,9 +1463,6 @@ document.addEventListener(
             refreshing ||
             window.scrollY !== 0
         ) {
-
-            pulling = false;
-
             return;
         }
 
@@ -1513,8 +1472,6 @@ document.addEventListener(
 
 
         pulling = true;
-
-        hideChallengeMessage();
     },
     {
         passive: true
@@ -1531,7 +1488,6 @@ document.addEventListener(
             refreshing ||
             window.scrollY !== 0
         ) {
-
             return;
         }
 
@@ -1546,24 +1502,7 @@ document.addEventListener(
 
 
         if (distance <= 0) {
-
-            hideChallengeMessage();
-
             return;
-        }
-
-
-        /*
-         * Show the second message only after
-         * the user has actually started pulling.
-         */
-
-        if (
-            window.innerWidth <= 699 &&
-            distance > 10
-        ) {
-
-            showChallengeMessage();
         }
 
 
@@ -1613,7 +1552,6 @@ document.addEventListener(
             !pulling ||
             refreshing
         ) {
-
             return;
         }
 
@@ -1624,14 +1562,6 @@ document.addEventListener(
 
 
         pulling = false;
-
-
-        /*
-         * Hide the second message when
-         * the pull gesture ends.
-         */
-
-        hideChallengeMessage();
 
 
         if (
@@ -1654,23 +1584,6 @@ document.addEventListener(
 );
 
 
-document.addEventListener(
-    "touchcancel",
-    function() {
-
-        pulling = false;
-
-        hideChallengeMessage();
-
-        pullRefresh.style.transform =
-            "translate(-50%, -100%)";
-    },
-    {
-        passive: true
-    }
-);
-
-
 async function refreshDividends() {
 
     if (refreshing) {
@@ -1679,9 +1592,6 @@ async function refreshDividends() {
 
 
     refreshing = true;
-
-
-    hideChallengeMessage();
 
 
     pullRefresh.classList.add(
@@ -1726,8 +1636,6 @@ async function refreshDividends() {
 
 
                 refreshing = false;
-
-                hideChallengeMessage();
 
             },
             500
