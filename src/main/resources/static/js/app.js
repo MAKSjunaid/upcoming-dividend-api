@@ -76,20 +76,29 @@ let currentSort = "expectedDesc";
 
 function updateStickyHeader() {
 
-    const scrolled =
-        window.scrollY > 20;
+    const scrollY =
+        window.scrollY;
+
+    const SHRINK_POINT = 30;
+    const EXPAND_POINT = 5;
 
     if (!stickyHeader) {
         return;
     }
 
-    if (scrolled) {
+    if (
+        !stickyHeader.classList.contains("scrolled") &&
+        scrollY > SHRINK_POINT
+    ) {
 
         stickyHeader.classList.add(
             "scrolled"
         );
 
-    } else {
+    } else if (
+        stickyHeader.classList.contains("scrolled") &&
+        scrollY < EXPAND_POINT
+    ) {
 
         stickyHeader.classList.remove(
             "scrolled"
