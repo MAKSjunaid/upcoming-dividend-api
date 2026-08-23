@@ -61,9 +61,6 @@ const sortFilter =
 const stickyHeader =
     document.querySelector(".sticky-header");
 
-const pageHeader =
-    document.querySelector(".page-header");
-
 
 let dividendData = [];
 
@@ -72,26 +69,30 @@ let currentInvestment = null;
 let currentSort = "expectedDesc";
 
 
+/* =========================================================
+   STICKY HEADER
+   ONLY THE FILTER SHRINKS
+   ========================================================= */
+
 function updateStickyHeader() {
 
     const scrolled =
         window.scrollY > 20;
 
-
-    if (stickyHeader) {
-
-        stickyHeader.classList.toggle(
-            "scrolled",
-            scrolled
-        );
+    if (!stickyHeader) {
+        return;
     }
 
+    if (scrolled) {
 
-    if (pageHeader) {
+        stickyHeader.classList.add(
+            "scrolled"
+        );
 
-        pageHeader.classList.toggle(
-            "scrolled",
-            scrolled
+    } else {
+
+        stickyHeader.classList.remove(
+            "scrolled"
         );
     }
 }
@@ -108,6 +109,10 @@ window.addEventListener(
 
 updateStickyHeader();
 
+
+/* =========================================================
+   DATE FUNCTIONS
+   ========================================================= */
 
 function getOrdinal(day) {
 
@@ -138,17 +143,21 @@ function formatDate(date) {
         return "";
     }
 
-    const parts = date.split("-");
+    const parts =
+        date.split("-");
 
     if (parts.length !== 3) {
         return date;
     }
 
-    const year = parts[0];
+    const year =
+        parts[0];
 
-    const month = Number(parts[1]);
+    const month =
+        Number(parts[1]);
 
-    const day = Number(parts[2]);
+    const day =
+        Number(parts[2]);
 
     const months = [
         "Jan",
@@ -190,17 +199,21 @@ function formatFilterDate(date) {
         return "";
     }
 
-    const parts = date.split("-");
+    const parts =
+        date.split("-");
 
     if (parts.length !== 3) {
         return date;
     }
 
-    const year = parts[0];
+    const year =
+        parts[0];
 
-    const month = Number(parts[1]);
+    const month =
+        Number(parts[1]);
 
-    const day = Number(parts[2]);
+    const day =
+        Number(parts[2]);
 
     const months = [
         "Jan",
@@ -241,7 +254,8 @@ function formatApiDate(date) {
         return "";
     }
 
-    const parts = date.split("-");
+    const parts =
+        date.split("-");
 
     if (parts.length !== 3) {
         return "";
@@ -323,6 +337,10 @@ function formatMoney(value) {
 }
 
 
+/* =========================================================
+   DATE DISPLAY
+   ========================================================= */
+
 function updateDateDisplays() {
 
     fromDateDisplay.textContent =
@@ -336,6 +354,10 @@ function updateDateDisplays() {
         );
 }
 
+
+/* =========================================================
+   SEARCH PANEL
+   ========================================================= */
 
 function openSearchPanel() {
 
@@ -415,6 +437,10 @@ sortFilter.addEventListener(
     }
 );
 
+
+/* =========================================================
+   DATE CALCULATION
+   ========================================================= */
 
 function getTomorrow() {
 
@@ -552,6 +578,10 @@ function resolveDates() {
     };
 }
 
+
+/* =========================================================
+   SEARCH
+   ========================================================= */
 
 async function searchDividends() {
 
@@ -737,6 +767,10 @@ async function searchDividends() {
 }
 
 
+/* =========================================================
+   SUMMARY
+   ========================================================= */
+
 function updateSummary(
     investment,
     dates
@@ -778,6 +812,10 @@ function updateSummary(
     }
 }
 
+
+/* =========================================================
+   SORTING
+   ========================================================= */
 
 function sortStocks() {
 
@@ -908,6 +946,10 @@ function getExpectedDividend(stock) {
     );
 }
 
+
+/* =========================================================
+   DATE SORT
+   ========================================================= */
 
 function getFromDateTime() {
 
@@ -1053,6 +1095,7 @@ function getDateDistanceFromFromDate(stock) {
         fromTime === null ||
         exDateTime === null
     ) {
+
         return Number.MAX_SAFE_INTEGER;
     }
 
@@ -1073,6 +1116,10 @@ function getDateDistanceFromFromDate(stock) {
     );
 }
 
+
+/* =========================================================
+   SORT MESSAGE
+   ========================================================= */
 
 function updateSortMessage() {
 
@@ -1117,6 +1164,10 @@ function updateSortMessage() {
 }
 
 
+/* =========================================================
+   RENDER STOCKS
+   ========================================================= */
+
 function renderStocks(
     data,
     investment
@@ -1147,7 +1198,7 @@ function renderStocks(
 
 
     data.forEach(
-        function(stock) {
+        function(stock, index) {
 
             const price =
                 Number(
@@ -1199,6 +1250,10 @@ function renderStocks(
 
             card.className =
                 "stock-card";
+
+
+            card.style.animationDelay =
+                `${index * 0.06}s`;
 
 
             card.innerHTML = `
@@ -1361,6 +1416,10 @@ function renderStocks(
 }
 
 
+/* =========================================================
+   ERROR HANDLING
+   ========================================================= */
+
 function showError(message) {
 
     filterError.textContent =
@@ -1395,6 +1454,10 @@ function clearMessages() {
 }
 
 
+/* =========================================================
+   DEFAULT DATES
+   ========================================================= */
+
 function setDefaultDates() {
 
     const tomorrow =
@@ -1426,6 +1489,10 @@ setDefaultDates();
 
 updateDateDisplays();
 
+
+/* =========================================================
+   PULL TO REFRESH
+   ========================================================= */
 
 let touchStartY = 0;
 
@@ -1624,5 +1691,9 @@ async function refreshDividends() {
     }
 }
 
+
+/* =========================================================
+   INITIAL SEARCH
+   ========================================================= */
 
 searchDividends();
