@@ -370,9 +370,20 @@ function updateDateDisplays() {
 
 function openSearchPanel() {
 
-    searchForm.classList.add(
-        "open"
-    );
+    if (
+        searchForm.classList.contains("open")
+    ) {
+
+        searchForm.classList.remove(
+            "open"
+        );
+
+    } else {
+
+        searchForm.classList.add(
+            "open"
+        );
+    }
 }
 
 
@@ -382,6 +393,25 @@ function closeSearchPanel() {
         "open"
     );
 }
+
+
+/*
+ * CLOSE FILTER WHEN USER TAPS/CLICKS
+ * ANYWHERE ON THE SHARE DISPLAY AREA
+ */
+
+stockList.addEventListener(
+    "click",
+    function() {
+
+        if (
+            searchForm.classList.contains("open")
+        ) {
+
+            closeSearchPanel();
+        }
+    }
+);
 
 
 searchSummary.addEventListener(
