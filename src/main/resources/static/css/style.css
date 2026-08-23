@@ -176,17 +176,17 @@ body {
 }
 
 .sticky-header.scrolled .search-summary {
-    min-height: 46px;
-    padding: 6px 11px;
+    min-height: 52px;
+    padding: 8px 12px;
 }
 
 .sticky-header.scrolled .date-summary {
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .sticky-header.scrolled .investment-summary {
-    margin-top: 0;
-    font-size: 11px;
+    margin-top: 2px;
+    font-size: 12px;
 }
 
 .sticky-header.scrolled .edit-button {
