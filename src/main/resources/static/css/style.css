@@ -29,9 +29,6 @@ body {
     background: rgba(245, 247, 251, 0.30);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    transition:
-        padding 0.28s ease,
-        background 0.28s ease;
 }
 
 .sticky-header::after {
@@ -61,10 +58,6 @@ body {
     box-shadow: 0 6px 25px rgba(25, 35, 55, 0.06);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-
-    transition:
-        border-radius 0.28s ease,
-        box-shadow 0.28s ease;
 }
 
 .search-summary {
@@ -76,10 +69,6 @@ body {
     justify-content: space-between;
 
     cursor: pointer;
-
-    transition:
-        min-height 0.28s ease,
-        padding 0.28s ease;
 }
 
 .summary-content {
@@ -90,10 +79,6 @@ body {
     color: #727c8f;
     font-size: 13px;
     font-weight: 600;
-
-    transition:
-        font-size 0.28s ease,
-        transform 0.28s ease;
 }
 
 .investment-summary {
@@ -101,11 +86,6 @@ body {
     color: #172033;
     font-size: 13px;
     font-weight: 750;
-
-    transition:
-        opacity 0.2s ease,
-        max-height 0.28s ease,
-        margin 0.28s ease;
 }
 
 .edit-button {
@@ -121,45 +101,17 @@ body {
 
     font-size: 16px;
     cursor: pointer;
-
-    transition:
-        width 0.28s ease,
-        height 0.28s ease,
-        border-radius 0.28s ease,
-        font-size 0.28s ease;
 }
 
 
-/* SHRUNK STICKY HEADER */
+/* STICKY HEADER */
 
 .sticky-header.scrolled {
-    padding-top: 6px;
-    padding-bottom: 2px;
+    background: rgba(245, 247, 251, 0.75);
 }
 
 .sticky-header.scrolled .search-card {
-    border-radius: 14px;
-}
-
-.sticky-header.scrolled .search-summary {
-    min-height: 46px;
-    padding: 6px 11px;
-}
-
-.sticky-header.scrolled .date-summary {
-    font-size: 12px;
-}
-
-.sticky-header.scrolled .investment-summary {
-    margin-top: 0;
-    font-size: 11px;
-}
-
-.sticky-header.scrolled .edit-button {
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-    font-size: 14px;
+    box-shadow: 0 4px 18px rgba(25, 35, 55, 0.05);
 }
 
 
@@ -306,9 +258,6 @@ body {
 
 .page-header {
     padding: 7px 16px 3px;
-
-    transition:
-        padding 0.28s ease;
 }
 
 .page-header-top {
@@ -316,9 +265,6 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-
-    transition:
-        gap 0.28s ease;
 }
 
 .page-header h1 {
@@ -328,10 +274,6 @@ body {
     font-size: 14px;
     font-weight: 650;
     letter-spacing: 0;
-
-    transition:
-        font-size 0.28s ease,
-        margin 0.28s ease;
 }
 
 
@@ -356,13 +298,6 @@ body {
 
     outline: none;
     cursor: pointer;
-
-    transition:
-        height 0.28s ease,
-        min-width 0.28s ease,
-        font-size 0.28s ease,
-        border-radius 0.28s ease,
-        padding 0.28s ease;
 }
 
 .sort-filter:hover {
@@ -377,38 +312,13 @@ body {
     margin: 0;
     color: #7a8497;
     font-size: 12px;
-
-    transition:
-        font-size 0.28s ease,
-        margin 0.28s ease;
 }
 
 
-/* SHRUNK PAGE HEADER */
+/* PAGE HEADER SCROLLED */
 
 .page-header.scrolled {
-    padding-top: 3px;
-    padding-bottom: 1px;
-}
-
-.page-header.scrolled h1 {
-    font-size: 12px;
-    margin-top: 1px;
-    margin-bottom: 0;
-}
-
-.page-header.scrolled p {
-    font-size: 10px;
-    margin-top: 0;
-}
-
-.page-header.scrolled .sort-filter {
-    height: 28px;
-    min-width: 92px;
-    font-size: 9px;
-    border-radius: 8px;
-    padding-left: 8px;
-    padding-right: 20px;
+    opacity: 0.98;
 }
 
 
@@ -433,36 +343,6 @@ body {
     box-shadow:
         0 3px 10px rgba(25, 35, 55, 0.03),
         0 7px 18px rgba(25, 35, 55, 0.03);
-
-    opacity: 0;
-
-    transform:
-        translateY(10px)
-        scale(0.99);
-
-    animation:
-        stockCardAppear
-        0.38s
-        cubic-bezier(0.22, 1, 0.36, 1)
-        forwards;
-}
-
-
-@keyframes stockCardAppear {
-
-    0% {
-        opacity: 0;
-        transform:
-            translateY(10px)
-            scale(0.99);
-    }
-
-    100% {
-        opacity: 1;
-        transform:
-            translateY(0)
-            scale(1);
-    }
 }
 
 
@@ -687,7 +567,7 @@ body {
     }
 
     .page-header h1 {
-        font-size: 22px;
+        font-size: 14px;
     }
 
     .sort-filter {
@@ -764,16 +644,6 @@ body {
     }
 
     .metric-label {
-        font-size: 8px;
-    }
-
-    .page-header.scrolled h1 {
-        font-size: 11px;
-    }
-
-    .page-header.scrolled .sort-filter {
-        min-width: 88px;
-        max-width: 88px;
         font-size: 8px;
     }
 }
