@@ -80,35 +80,19 @@ function updateStickyHeader() {
 
     if (stickyHeader) {
 
-        if (scrolled) {
-
-            stickyHeader.classList.add(
-                "scrolled"
-            );
-
-        } else {
-
-            stickyHeader.classList.remove(
-                "scrolled"
-            );
-        }
+        stickyHeader.classList.toggle(
+            "scrolled",
+            scrolled
+        );
     }
 
 
     if (pageHeader) {
 
-        if (scrolled) {
-
-            pageHeader.classList.add(
-                "scrolled"
-            );
-
-        } else {
-
-            pageHeader.classList.remove(
-                "scrolled"
-            );
-        }
+        pageHeader.classList.toggle(
+            "scrolled",
+            scrolled
+        );
     }
 }
 
@@ -1215,9 +1199,6 @@ function renderStocks(
 
             card.className =
                 "stock-card";
-
-            card.style.animationDelay =
-                `${data.indexOf(stock) * 0.06}s`;
 
 
             card.innerHTML = `
