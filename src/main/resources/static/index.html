@@ -2,7 +2,9 @@
 <html lang="en">
 
 <head>
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
     <meta charset="UTF-8">
 
     <meta
@@ -32,11 +34,30 @@
 </div>
 
 
+<!-- =====================================================
+     FLYING FAVORITE STAR
+     ===================================================== -->
+
+<div
+        id="favoriteFlyStar"
+        class="favorite-fly-star">
+
+    ★
+
+</div>
+
+
 <div class="app">
+
+
+    <!-- =================================================
+         STICKY FILTER
+         ================================================= -->
 
     <div class="sticky-header">
 
         <div class="search-card">
+
 
             <div
                     class="search-summary"
@@ -47,8 +68,11 @@
                     <div
                             class="date-summary"
                             id="dateSummary">
+
                         Select dates
+
                     </div>
+
 
                     <div
                             class="investment-summary hidden"
@@ -74,8 +98,11 @@
                     class="search-form"
                     id="searchForm">
 
+
                 <div class="form-title">
+
                     Search Dividends
+
                 </div>
 
 
@@ -84,6 +111,7 @@
                     <label for="fromDate">
                         From Date
                     </label>
+
 
                     <div class="date-input-wrapper">
 
@@ -107,6 +135,7 @@
                         To Date
                     </label>
 
+
                     <div class="date-input-wrapper">
 
                         <input
@@ -126,8 +155,11 @@
                 <div class="field">
 
                     <label for="investmentAmount">
+
                         Investment Amount
+
                     </label>
+
 
                     <input
                             type="number"
@@ -160,14 +192,23 @@
     </div>
 
 
+    <!-- =================================================
+         MAIN
+         ================================================= -->
+
     <main>
+
 
         <div class="page-header">
 
+
             <div class="page-header-top">
 
+
                 <h1>
+
                     Upcoming Dividends
+
                 </h1>
 
 
@@ -175,21 +216,41 @@
                         id="sortFilter"
                         class="sort-filter">
 
+
                     <option value="expectedDesc">
+
                         Select Filter
+
                     </option>
+
 
                     <option value="dateAsc">
+
                         Date: Latest
+
                     </option>
+
 
                     <option value="dividendDesc">
+
                         Dividend: High
+
                     </option>
 
+
                     <option value="dividendAsc">
+
                         Dividend: Low
+
                     </option>
+
+
+                    <option value="favorites">
+
+                        ⭐ Favorites
+
+                    </option>
+
 
                 </select>
 
@@ -197,7 +258,9 @@
 
 
             <p id="resultMessage">
+
                 Sort by Dividend: High to Low
+
             </p>
 
         </div>
@@ -235,9 +298,11 @@
 
         <div class="ai-message">
 
-            People say AI will take our jobs. I say, without AI, my job might take me out first. 😂
+            People say AI will take our jobs.
+            I say, without AI, my job might take me out first. 😂
 
         </div>
+
 
     </main>
 
