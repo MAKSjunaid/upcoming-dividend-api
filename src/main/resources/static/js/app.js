@@ -138,6 +138,8 @@ function startLoadingAnimation() {
 
         "Checking ex-dividend dates...",
 
+        "Is this a loading screen or a meditation session?",
+
         "Finding dividend opportunities...",
 
         "Calculating potential rewards...",
