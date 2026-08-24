@@ -138,8 +138,6 @@ function startLoadingAnimation() {
 
         "Checking ex-dividend dates...",
 
-        "Is this a loading screen or a meditation session?",
-
         "Finding dividend opportunities...",
 
         "Calculating potential rewards...",
@@ -150,7 +148,15 @@ function startLoadingAnimation() {
 
         "Almost there...",
 
-        "Preparing your dividend list..."
+        "Is this a loading screen or a meditation session?",
+
+        "Preparing your dividend list...",
+
+        "Loading… blame the internet...",
+
+        "Asking the database nicely...",
+
+        "Convincing the server this is important..."
 
     ];
 
