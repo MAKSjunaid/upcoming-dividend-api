@@ -37,6 +37,9 @@ const stockList =
 const loading =
     document.getElementById("loading");
 
+const loadingMessage =
+    document.getElementById("loadingMessage");
+
 const filterError =
     document.getElementById("filterError");
 
@@ -70,6 +73,8 @@ let dividendData = [];
 let currentInvestment = null;
 
 let currentSort = "expectedDesc";
+
+let loadingMessageTimer = null;
 
 
 /* =========================================================
@@ -117,6 +122,109 @@ function getFavoriteKey(stock) {
 
 
 /* =========================================================
+   LOADING ANIMATION MESSAGES
+   ========================================================= */
+
+function startLoadingAnimation() {
+
+    if (!loadingMessage) {
+        return;
+    }
+
+
+    const messages = [
+
+        "Scanning upcoming dividends...",
+
+        "Checking ex-dividend dates...",
+
+        "Finding dividend opportunities...",
+
+        "Calculating potential rewards...",
+
+        "Checking the stock market...",
+
+        "Looking for money-making opportunities...",
+
+        "Almost there...",
+
+        "Preparing your dividend list..."
+
+    ];
+
+
+    let index = 0;
+
+
+    loadingMessage.textContent =
+        messages[index];
+
+
+    clearInterval(
+        loadingMessageTimer
+    );
+
+
+    loadingMessageTimer =
+        setInterval(
+            function() {
+
+                if (
+                    loadingMessage
+                ) {
+
+                    loadingMessage.style.opacity =
+                        "0";
+
+
+                    setTimeout(
+                        function() {
+
+                            index =
+                                (
+                                    index + 1
+                                ) %
+                                messages.length;
+
+
+                            loadingMessage.textContent =
+                                messages[index];
+
+
+                            loadingMessage.style.opacity =
+                                "1";
+
+                        },
+                        180
+                    );
+                }
+
+            },
+            1700
+        );
+}
+
+
+function stopLoadingAnimation() {
+
+    clearInterval(
+        loadingMessageTimer
+    );
+
+
+    loadingMessageTimer =
+        null;
+
+
+    if (loadingMessage) {
+
+        loadingMessage.style.opacity =
+            "1";
+    }
+}
+
+
+/* =========================================================
    STICKY HEADER
    ========================================================= */
 
@@ -125,9 +233,11 @@ function updateStickyHeader() {
     const scrollY =
         window.scrollY;
 
-    const SHRINK_POINT = 30;
+    const SHRINK_POINT =
+        30;
 
-    const EXPAND_POINT = 5;
+    const EXPAND_POINT =
+        5;
 
 
     if (!stickyHeader) {
@@ -230,6 +340,7 @@ function formatDate(date) {
 
 
     const months = [
+
         "Jan",
         "Feb",
         "Mar",
@@ -242,6 +353,7 @@ function formatDate(date) {
         "Oct",
         "Nov",
         "Dec"
+
     ];
 
 
@@ -286,6 +398,7 @@ function formatFilterDate(date) {
 
 
     const months = [
+
         "Jan",
         "Feb",
         "Mar",
@@ -298,6 +411,7 @@ function formatFilterDate(date) {
         "Oct",
         "Nov",
         "Dec"
+
     ];
 
 
@@ -814,6 +928,9 @@ async function searchDividends() {
     );
 
 
+    startLoadingAnimation();
+
+
     searchButton.disabled =
         true;
 
@@ -934,6 +1051,9 @@ async function searchDividends() {
         );
 
     } finally {
+
+        stopLoadingAnimation();
+
 
         loading.classList.add(
             "hidden"
@@ -1419,13 +1539,6 @@ function animateFavoriteStar(
     let endY;
 
 
-    /*
-     * FAVORITE:
-     *
-     * Star starts outside and flies
-     * into the favorite button.
-     */
-
     if (!flyingAway) {
 
         endX =
@@ -1445,17 +1558,8 @@ function animateFavoriteStar(
 
         favoriteFlyStar.style.top =
             `${outsideTop - 14}px`;
-    }
 
-
-    /*
-     * UNFAVORITE:
-     *
-     * Star starts in the button and
-     * flies outside.
-     */
-
-    else {
+    } else {
 
         endX =
             outsideLeft;
@@ -1619,26 +1723,20 @@ function toggleFavorite(
         favorites.has(key);
 
 
-    /*
-     * =====================================================
-     * UNFAVORITE
-     * =====================================================
-     */
+    /* =====================================================
+       UNFAVORITE
+       ===================================================== */
 
     if (wasFavorite) {
 
-        /*
-         * Remove favorite immediately.
-         */
-
         favorites.delete(key);
-
 
         saveFavorites();
 
 
         /*
-         * Remove yellow state immediately.
+         * IMPORTANT:
+         * Remove yellow immediately.
          */
 
         button.classList.remove(
@@ -1662,20 +1760,11 @@ function toggleFavorite(
         );
 
 
-        /*
-         * Star flies AWAY.
-         */
-
         animateFavoriteStar(
             button,
             true
         );
 
-
-        /*
-         * Button pop.
-
-         */
 
         button.classList.remove(
             "favorite-changing"
@@ -1702,11 +1791,6 @@ function toggleFavorite(
         );
 
 
-        /*
-         * If Favorites filter is active,
-         * refresh the list.
-         */
-
         if (
             currentSort ===
             "favorites"
@@ -1727,21 +1811,14 @@ function toggleFavorite(
     }
 
 
-    /*
-     * =====================================================
-     * FAVORITE
-     * =====================================================
-     */
+    /* =====================================================
+       FAVORITE
+       ===================================================== */
 
     favorites.add(key);
 
-
     saveFavorites();
 
-
-    /*
-     * Change to yellow immediately.
-     */
 
     button.classList.add(
         "is-favorite"
@@ -1764,20 +1841,11 @@ function toggleFavorite(
     );
 
 
-    /*
-     * Star comes from outside and
-     * merges into the button.
-     */
-
     animateFavoriteStar(
         button,
         false
     );
 
-
-    /*
-     * Button pop animation.
-     */
 
     button.classList.remove(
         "favorite-changing"
@@ -1961,10 +2029,12 @@ function renderStocks(
                 <div class="company-name">
 
                     <span>
+
                         ${
                             stock.share_name ||
                             "Unknown Company"
                         }
+
                     </span>
 
                 </div>
