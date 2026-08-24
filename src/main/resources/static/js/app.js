@@ -61,6 +61,9 @@ const sortFilter =
 const stickyHeader =
     document.querySelector(".sticky-header");
 
+const favoriteFlyStar =
+    document.getElementById("favoriteFlyStar");
+
 
 let dividendData = [];
 
@@ -70,8 +73,51 @@ let currentSort = "expectedDesc";
 
 
 /* =========================================================
+   FAVORITES
+   ========================================================= */
+
+let favorites = new Set(
+    JSON.parse(
+        localStorage.getItem(
+            "dividendFavorites"
+        ) || "[]"
+    )
+);
+
+
+function saveFavorites() {
+
+    localStorage.setItem(
+        "dividendFavorites",
+        JSON.stringify(
+            Array.from(favorites)
+        )
+    );
+}
+
+
+function getFavoriteKey(stock) {
+
+    if (
+        stock.symbol &&
+        String(stock.symbol).trim()
+    ) {
+
+        return String(
+            stock.symbol
+        ).trim();
+    }
+
+
+    return String(
+        stock.share_name ||
+        ""
+    ).trim();
+}
+
+
+/* =========================================================
    STICKY HEADER
-   ONLY THE FILTER SHRINKS
    ========================================================= */
 
 function updateStickyHeader() {
@@ -80,11 +126,14 @@ function updateStickyHeader() {
         window.scrollY;
 
     const SHRINK_POINT = 30;
+
     const EXPAND_POINT = 5;
+
 
     if (!stickyHeader) {
         return;
     }
+
 
     if (
         !stickyHeader.classList.contains("scrolled") &&
@@ -125,9 +174,14 @@ updateStickyHeader();
 
 function getOrdinal(day) {
 
-    if (day >= 11 && day <= 13) {
+    if (
+        day >= 11 &&
+        day <= 13
+    ) {
+
         return "th";
     }
+
 
     switch (day % 10) {
 
@@ -152,12 +206,18 @@ function formatDate(date) {
         return "";
     }
 
+
     const parts =
         date.split("-");
 
-    if (parts.length !== 3) {
+
+    if (
+        parts.length !== 3
+    ) {
+
         return date;
     }
+
 
     const year =
         parts[0];
@@ -167,6 +227,7 @@ function formatDate(date) {
 
     const day =
         Number(parts[2]);
+
 
     const months = [
         "Jan",
@@ -183,13 +244,6 @@ function formatDate(date) {
         "Dec"
     ];
 
-    if (
-        month < 1 ||
-        month > 12 ||
-        day < 1
-    ) {
-        return date;
-    }
 
     return (
         day +
@@ -208,12 +262,18 @@ function formatFilterDate(date) {
         return "";
     }
 
+
     const parts =
         date.split("-");
 
-    if (parts.length !== 3) {
+
+    if (
+        parts.length !== 3
+    ) {
+
         return date;
     }
+
 
     const year =
         parts[0];
@@ -223,6 +283,7 @@ function formatFilterDate(date) {
 
     const day =
         Number(parts[2]);
+
 
     const months = [
         "Jan",
@@ -239,13 +300,6 @@ function formatFilterDate(date) {
         "Dec"
     ];
 
-    if (
-        month < 1 ||
-        month > 12 ||
-        day < 1
-    ) {
-        return date;
-    }
 
     return (
         String(day).padStart(2, "0") +
@@ -263,12 +317,18 @@ function formatApiDate(date) {
         return "";
     }
 
+
     const parts =
         date.split("-");
 
-    if (parts.length !== 3) {
+
+    if (
+        parts.length !== 3
+    ) {
+
         return "";
     }
+
 
     return (
         parts[2] +
@@ -286,12 +346,18 @@ function formatExDividendDate(date) {
         return "N/A";
     }
 
+
     const parts =
         date.trim().split("-");
 
-    if (parts.length !== 3) {
+
+    if (
+        parts.length !== 3
+    ) {
+
         return date;
     }
+
 
     const day =
         Number(parts[0]);
@@ -302,13 +368,16 @@ function formatExDividendDate(date) {
     const year =
         parts[2];
 
+
     if (
         isNaN(day) ||
         !month ||
         !year
     ) {
+
         return date;
     }
+
 
     return (
         day +
@@ -330,8 +399,10 @@ function formatMoney(value) {
         value === "" ||
         isNaN(Number(value))
     ) {
+
         return "N/A";
     }
+
 
     return (
         "₹" +
@@ -347,6 +418,50 @@ function formatMoney(value) {
 
 
 /* =========================================================
+   TOMORROW
+   ========================================================= */
+
+function isTomorrow(date) {
+
+    if (!date) {
+        return false;
+    }
+
+
+    const exTime =
+        getExDividendTime(date);
+
+
+    if (exTime === null) {
+        return false;
+    }
+
+
+    const tomorrow =
+        getTomorrow();
+
+
+    const tomorrowStart =
+        new Date(
+            tomorrow.getFullYear(),
+            tomorrow.getMonth(),
+            tomorrow.getDate()
+        ).getTime();
+
+
+    const tomorrowEnd =
+        tomorrowStart +
+        86400000;
+
+
+    return (
+        exTime >= tomorrowStart &&
+        exTime < tomorrowEnd
+    );
+}
+
+
+/* =========================================================
    DATE DISPLAY
    ========================================================= */
 
@@ -356,6 +471,7 @@ function updateDateDisplays() {
         formatFilterDate(
             fromDate.value
         );
+
 
     toDateDisplay.textContent =
         formatFilterDate(
@@ -370,20 +486,9 @@ function updateDateDisplays() {
 
 function openSearchPanel() {
 
-    if (
-        searchForm.classList.contains("open")
-    ) {
-
-        searchForm.classList.remove(
-            "open"
-        );
-
-    } else {
-
-        searchForm.classList.add(
-            "open"
-        );
-    }
+    searchForm.classList.add(
+        "open"
+    );
 }
 
 
@@ -395,17 +500,24 @@ function closeSearchPanel() {
 }
 
 
-/*
- * CLOSE FILTER WHEN USER TAPS/CLICKS
- * ANYWHERE ON THE SHARE DISPLAY AREA
- */
-
 stockList.addEventListener(
     "click",
-    function() {
+    function(event) {
 
         if (
-            searchForm.classList.contains("open")
+            event.target.closest(
+                ".favorite-button"
+            )
+        ) {
+
+            return;
+        }
+
+
+        if (
+            searchForm.classList.contains(
+                "open"
+            )
         ) {
 
             closeSearchPanel();
@@ -416,7 +528,21 @@ stockList.addEventListener(
 
 searchSummary.addEventListener(
     "click",
-    openSearchPanel
+    function() {
+
+        if (
+            searchForm.classList.contains(
+                "open"
+            )
+        ) {
+
+            closeSearchPanel();
+
+        } else {
+
+            openSearchPanel();
+        }
+    }
 );
 
 
@@ -486,12 +612,15 @@ function getTomorrow() {
     const today =
         new Date();
 
+
     const tomorrow =
         new Date(today);
+
 
     tomorrow.setDate(
         today.getDate() + 1
     );
+
 
     return tomorrow;
 }
@@ -502,15 +631,18 @@ function dateToInputValue(date) {
     const year =
         date.getFullYear();
 
+
     const month =
         String(
             date.getMonth() + 1
         ).padStart(2, "0");
 
+
     const day =
         String(
             date.getDate()
         ).padStart(2, "0");
+
 
     return (
         year +
@@ -527,6 +659,7 @@ function addOneMonth(dateValue) {
     const parts =
         dateValue.split("-");
 
+
     const year =
         Number(parts[0]);
 
@@ -536,6 +669,7 @@ function addOneMonth(dateValue) {
     const day =
         Number(parts[2]);
 
+
     const date =
         new Date(
             year,
@@ -543,11 +677,15 @@ function addOneMonth(dateValue) {
             day
         );
 
+
     date.setMonth(
         date.getMonth() + 1
     );
 
-    return dateToInputValue(date);
+
+    return dateToInputValue(
+        date
+    );
 }
 
 
@@ -556,8 +694,10 @@ function resolveDates() {
     let selectedFrom =
         fromDate.value;
 
+
     let selectedTo =
         toDate.value;
+
 
     const tomorrow =
         dateToInputValue(
@@ -577,9 +717,8 @@ function resolveDates() {
             addOneMonth(
                 selectedFrom
             );
-    }
 
-    else if (
+    } else if (
         selectedFrom &&
         !selectedTo
     ) {
@@ -588,9 +727,8 @@ function resolveDates() {
             addOneMonth(
                 selectedFrom
             );
-    }
 
-    else if (
+    } else if (
         !selectedFrom &&
         selectedTo
     ) {
@@ -679,6 +817,7 @@ async function searchDividends() {
     searchButton.disabled =
         true;
 
+
     searchButton.textContent =
         "Searching...";
 
@@ -719,6 +858,7 @@ async function searchDividends() {
             const message =
                 await response.text();
 
+
             throw new Error(
                 message ||
                 "Unable to fetch dividend data."
@@ -740,6 +880,7 @@ async function searchDividends() {
 
         fromDate.value =
             dates.from;
+
 
         toDate.value =
             dates.to;
@@ -775,6 +916,7 @@ async function searchDividends() {
 
         clearFilterError();
 
+
         closeSearchPanel();
 
 
@@ -797,8 +939,10 @@ async function searchDividends() {
             "hidden"
         );
 
+
         searchButton.disabled =
             false;
+
 
         searchButton.textContent =
             "Search";
@@ -836,6 +980,7 @@ function updateSummary(
                 investment
             );
 
+
         investmentSummary.classList.remove(
             "hidden"
         );
@@ -844,6 +989,7 @@ function updateSummary(
 
         investmentSummary.textContent =
             "";
+
 
         investmentSummary.classList.add(
             "hidden"
@@ -872,55 +1018,73 @@ function sortStocks() {
     }
 
 
-    const sortedData =
+    let sortedData =
         [...dividendData];
 
 
-    sortedData.sort(
-        function(a, b) {
+    if (
+        currentSort ===
+        "favorites"
+    ) {
 
-            if (
-                currentSort ===
-                "dateAsc"
-            ) {
+        sortedData =
+            sortedData.filter(
+                function(stock) {
 
-                return (
-                    getDateDistanceFromFromDate(a) -
-                    getDateDistanceFromFromDate(b)
-                );
-            }
+                    return favorites.has(
+                        getFavoriteKey(stock)
+                    );
+                }
+            );
+
+    } else {
+
+        sortedData.sort(
+            function(a, b) {
+
+                if (
+                    currentSort ===
+                    "dateAsc"
+                ) {
+
+                    return (
+                        getDateDistanceFromFromDate(a) -
+                        getDateDistanceFromFromDate(b)
+                    );
+                }
 
 
-            if (
-                currentSort ===
-                "dividendDesc"
-            ) {
+                if (
+                    currentSort ===
+                    "dividendDesc"
+                ) {
+
+                    return (
+                        getExpectedDividend(b) -
+                        getExpectedDividend(a)
+                    );
+                }
+
+
+                if (
+                    currentSort ===
+                    "dividendAsc"
+                ) {
+
+                    return (
+                        getExpectedDividend(a) -
+                        getExpectedDividend(b)
+                    );
+                }
+
 
                 return (
                     getExpectedDividend(b) -
                     getExpectedDividend(a)
                 );
             }
-
-
-            if (
-                currentSort ===
-                "dividendAsc"
-            ) {
-
-                return (
-                    getExpectedDividend(a) -
-                    getExpectedDividend(b)
-                );
-            }
-
-
-            return (
-                getExpectedDividend(b) -
-                getExpectedDividend(a)
-            );
-        }
-    );
+        );
+    }
 
 
     renderStocks(
@@ -939,6 +1103,7 @@ function getExpectedDividend(stock) {
         Number(
             stock.current_share_price
         );
+
 
     const dividend =
         Number(
@@ -1004,31 +1169,23 @@ function getFromDateTime() {
     if (
         parts.length !== 3
     ) {
+
         return null;
     }
 
 
-    const year =
-        Number(parts[0]);
-
-    const month =
-        Number(parts[1]) - 1;
-
-    const day =
-        Number(parts[2]);
-
-
     const date =
         new Date(
-            year,
-            month,
-            day
+            Number(parts[0]),
+            Number(parts[1]) - 1,
+            Number(parts[2])
         );
 
 
     if (
         isNaN(date.getTime())
     ) {
+
         return null;
     }
 
@@ -1051,6 +1208,7 @@ function getExDividendTime(date) {
     if (
         parts.length !== 3
     ) {
+
         return null;
     }
 
@@ -1060,6 +1218,7 @@ function getExDividendTime(date) {
 
 
     const months = {
+
         JAN: 0,
         FEB: 1,
         MAR: 2,
@@ -1072,6 +1231,7 @@ function getExDividendTime(date) {
         OCT: 9,
         NOV: 10,
         DEC: 11
+
     };
 
 
@@ -1095,6 +1255,7 @@ function getExDividendTime(date) {
         month === undefined ||
         isNaN(year)
     ) {
+
         return null;
     }
 
@@ -1110,6 +1271,7 @@ function getExDividendTime(date) {
     if (
         isNaN(result.getTime())
     ) {
+
         return null;
     }
 
@@ -1164,6 +1326,18 @@ function updateSortMessage() {
 
     if (
         currentSort ===
+        "favorites"
+    ) {
+
+        resultMessage.textContent =
+            "Showing Favorite Companies";
+
+        return;
+    }
+
+
+    if (
+        currentSort ===
         "dateAsc"
     ) {
 
@@ -1204,6 +1378,434 @@ function updateSortMessage() {
 
 
 /* =========================================================
+   FAVORITE ANIMATION
+   ========================================================= */
+
+function animateFavoriteStar(
+    button,
+    flyingAway
+) {
+
+    if (!button || !favoriteFlyStar) {
+        return;
+    }
+
+
+    const buttonRect =
+        button.getBoundingClientRect();
+
+
+    const startX =
+        buttonRect.left +
+        buttonRect.width / 2;
+
+
+    const startY =
+        buttonRect.top +
+        buttonRect.height / 2;
+
+
+    const outsideLeft =
+        window.innerWidth +
+        40;
+
+
+    const outsideTop =
+        -40;
+
+
+    let endX;
+
+    let endY;
+
+
+    /*
+     * FAVORITE:
+     *
+     * Star starts outside and flies
+     * into the favorite button.
+     */
+
+    if (!flyingAway) {
+
+        endX =
+            startX;
+
+        endY =
+            startY;
+
+
+        favoriteFlyStar.textContent =
+            "★";
+
+
+        favoriteFlyStar.style.left =
+            `${outsideLeft - 14}px`;
+
+
+        favoriteFlyStar.style.top =
+            `${outsideTop - 14}px`;
+    }
+
+
+    /*
+     * UNFAVORITE:
+     *
+     * Star starts in the button and
+     * flies outside.
+     */
+
+    else {
+
+        endX =
+            outsideLeft;
+
+        endY =
+            outsideTop;
+
+
+        favoriteFlyStar.textContent =
+            "★";
+
+
+        favoriteFlyStar.style.left =
+            `${startX - 14}px`;
+
+
+        favoriteFlyStar.style.top =
+            `${startY - 14}px`;
+    }
+
+
+    favoriteFlyStar.classList.remove(
+        "fly"
+    );
+
+
+    void favoriteFlyStar.offsetWidth;
+
+
+    favoriteFlyStar.classList.add(
+        "fly"
+    );
+
+
+    const startCenterX =
+        flyingAway
+            ? startX
+            : outsideLeft;
+
+
+    const startCenterY =
+        flyingAway
+            ? startY
+            : outsideTop;
+
+
+    const deltaX =
+        endX -
+        startCenterX;
+
+
+    const deltaY =
+        endY -
+        startCenterY;
+
+
+    const animation =
+        favoriteFlyStar.animate(
+            [
+
+                {
+                    transform:
+                        "translate(0, 0) scale(0.45) rotate(-25deg)",
+
+                    opacity: 0
+                },
+
+
+                {
+                    transform:
+                        `translate(
+                            ${deltaX * 0.25}px,
+                            ${deltaY * 0.25}px
+                        )
+                        scale(0.85)
+                        rotate(-10deg)`,
+
+                    opacity: 0.75,
+
+                    offset: 0.20
+                },
+
+
+                {
+                    transform:
+                        `translate(
+                            ${deltaX * 0.55}px,
+                            ${deltaY * 0.55}px
+                        )
+                        scale(1.15)
+                        rotate(8deg)`,
+
+                    opacity: 1,
+
+                    offset: 0.60
+                },
+
+
+                {
+                    transform:
+                        `translate(
+                            ${deltaX}px,
+                            ${deltaY}px
+                        )
+                        scale(1)
+                        rotate(0deg)`,
+
+                    opacity: 1
+                }
+
+            ],
+
+            {
+                duration: 1200,
+
+                easing:
+                    "cubic-bezier(0.22, 1, 0.36, 1)",
+
+                fill: "forwards"
+            }
+        );
+
+
+    animation.onfinish =
+        function() {
+
+            favoriteFlyStar.classList.remove(
+                "fly"
+            );
+
+
+            favoriteFlyStar.style.left =
+                "0px";
+
+
+            favoriteFlyStar.style.top =
+                "0px";
+        };
+}
+
+
+/* =========================================================
+   FAVORITE CLICK
+   ========================================================= */
+
+function toggleFavorite(
+    stock,
+    button
+) {
+
+    const key =
+        getFavoriteKey(stock);
+
+
+    if (!key) {
+        return;
+    }
+
+
+    const wasFavorite =
+        favorites.has(key);
+
+
+    /*
+     * =====================================================
+     * UNFAVORITE
+     * =====================================================
+     */
+
+    if (wasFavorite) {
+
+        /*
+         * Remove favorite immediately.
+         */
+
+        favorites.delete(key);
+
+
+        saveFavorites();
+
+
+        /*
+         * Remove yellow state immediately.
+         */
+
+        button.classList.remove(
+            "is-favorite"
+        );
+
+
+        button.textContent =
+            "☆";
+
+
+        button.setAttribute(
+            "aria-label",
+            "Add favorite"
+        );
+
+
+        button.setAttribute(
+            "title",
+            "Add favorite"
+        );
+
+
+        /*
+         * Star flies AWAY.
+         */
+
+        animateFavoriteStar(
+            button,
+            true
+        );
+
+
+        /*
+         * Button pop.
+
+         */
+
+        button.classList.remove(
+            "favorite-changing"
+        );
+
+
+        void button.offsetWidth;
+
+
+        button.classList.add(
+            "favorite-changing"
+        );
+
+
+        setTimeout(
+            function() {
+
+                button.classList.remove(
+                    "favorite-changing"
+                );
+
+            },
+            700
+        );
+
+
+        /*
+         * If Favorites filter is active,
+         * refresh the list.
+         */
+
+        if (
+            currentSort ===
+            "favorites"
+        ) {
+
+            setTimeout(
+                function() {
+
+                    sortStocks();
+
+                },
+                350
+            );
+        }
+
+
+        return;
+    }
+
+
+    /*
+     * =====================================================
+     * FAVORITE
+     * =====================================================
+     */
+
+    favorites.add(key);
+
+
+    saveFavorites();
+
+
+    /*
+     * Change to yellow immediately.
+     */
+
+    button.classList.add(
+        "is-favorite"
+    );
+
+
+    button.textContent =
+        "★";
+
+
+    button.setAttribute(
+        "aria-label",
+        "Remove favorite"
+    );
+
+
+    button.setAttribute(
+        "title",
+        "Remove favorite"
+    );
+
+
+    /*
+     * Star comes from outside and
+     * merges into the button.
+     */
+
+    animateFavoriteStar(
+        button,
+        false
+    );
+
+
+    /*
+     * Button pop animation.
+     */
+
+    button.classList.remove(
+        "favorite-changing"
+    );
+
+
+    void button.offsetWidth;
+
+
+    button.classList.add(
+        "favorite-changing"
+    );
+
+
+    setTimeout(
+        function() {
+
+            button.classList.remove(
+                "favorite-changing"
+            );
+
+        },
+        700
+    );
+}
+
+
+/* =========================================================
    RENDER STOCKS
    ========================================================= */
 
@@ -1224,8 +1826,21 @@ function renderStocks(
             "hidden"
         );
 
-        resultMessage.textContent =
-            "No dividends found for the selected dates.";
+
+        if (
+            currentSort ===
+            "favorites"
+        ) {
+
+            resultMessage.textContent =
+                "No favorite companies selected.";
+
+        } else {
+
+            resultMessage.textContent =
+                "No dividends found for the selected dates.";
+        }
+
 
         return;
     }
@@ -1252,6 +1867,7 @@ function renderStocks(
 
 
             let shares = 1;
+
 
             let expectedDividend =
                 isNaN(dividend)
@@ -1281,6 +1897,12 @@ function renderStocks(
             }
 
 
+            const tomorrow =
+                isTomorrow(
+                    stock.ex_dividend_date
+                );
+
+
             const card =
                 document.createElement(
                     "div"
@@ -1288,20 +1910,55 @@ function renderStocks(
 
 
             card.className =
-                "stock-card";
+                tomorrow
+                    ? "stock-card tomorrow-card"
+                    : "stock-card";
 
 
             card.style.animationDelay =
                 `${index * 0.06}s`;
 
 
+            const favoriteKey =
+                getFavoriteKey(stock);
+
+
+            const isFavorite =
+                favorites.has(
+                    favoriteKey
+                );
+
+
             card.innerHTML = `
 
-                <div class="company-name">
+                <button
+                    type="button"
+                    class="favorite-button ${
+                        isFavorite
+                            ? "is-favorite"
+                            : ""
+                    }"
+                    aria-label="${
+                        isFavorite
+                            ? "Remove favorite"
+                            : "Add favorite"
+                    }"
+                    title="${
+                        isFavorite
+                            ? "Remove favorite"
+                            : "Add favorite"
+                    }">
 
-                    <span class="field-icon">
-                        🏢
-                    </span>
+                    ${
+                        isFavorite
+                            ? "★"
+                            : "☆"
+                    }
+
+                </button>
+
+
+                <div class="company-name">
 
                     <span>
                         ${
@@ -1315,18 +1972,25 @@ function renderStocks(
 
                 <div class="symbol">
 
-                    <span class="field-icon">
-                        📊
-                    </span>
-
-                    <span>
-                        ${
-                            stock.symbol ||
-                            ""
-                        }
-                    </span>
+                    ${
+                        stock.symbol ||
+                        ""
+                    }
 
                 </div>
+
+
+                ${
+                    tomorrow
+                        ? `
+                            <div class="tomorrow-badge">
+
+                                💵 Last Chance for Dividend
+
+                            </div>
+                          `
+                        : ""
+                }
 
 
                 <div class="main-result">
@@ -1335,10 +1999,7 @@ function renderStocks(
 
                         <div class="expected-value">
 
-                            <span class="field-icon">
-                                💰
-                            </span>
-
+                            💰
                             ${
                                 formatMoney(
                                     expectedDividend
@@ -1371,10 +2032,7 @@ function renderStocks(
 
                         <div class="ex-date-value">
 
-                            <span class="field-icon">
-                                📅
-                            </span>
-
+                            📅
                             ${
                                 formatExDividendDate(
                                     stock.ex_dividend_date
@@ -1385,7 +2043,9 @@ function renderStocks(
 
 
                         <div class="ex-date-label">
+
                             Ex-Dividend Date
+
                         </div>
 
                     </div>
@@ -1399,10 +2059,7 @@ function renderStocks(
 
                         <div class="metric-value">
 
-                            <span class="field-icon">
-                                💵
-                            </span>
-
+                            💵
                             ${
                                 formatMoney(
                                     stock.dividend_amount
@@ -1413,7 +2070,9 @@ function renderStocks(
 
 
                         <div class="metric-label">
+
                             Dividend / Share
+
                         </div>
 
                     </div>
@@ -1423,10 +2082,7 @@ function renderStocks(
 
                         <div class="metric-value">
 
-                            <span class="field-icon">
-                                📈
-                            </span>
-
+                            📈
                             ${
                                 formatMoney(
                                     stock.current_share_price
@@ -1437,7 +2093,9 @@ function renderStocks(
 
 
                         <div class="metric-label">
+
                             Current Price
+
                         </div>
 
                     </div>
@@ -1445,6 +2103,29 @@ function renderStocks(
                 </div>
 
             `;
+
+
+            const favoriteButton =
+                card.querySelector(
+                    ".favorite-button"
+                );
+
+
+            favoriteButton.addEventListener(
+                "click",
+                function(event) {
+
+                    event.preventDefault();
+
+                    event.stopPropagation();
+
+
+                    toggleFavorite(
+                        stock,
+                        favoriteButton
+                    );
+                }
+            );
 
 
             stockList.appendChild(
@@ -1464,9 +2145,11 @@ function showError(message) {
     filterError.textContent =
         message;
 
+
     filterError.classList.remove(
         "hidden"
     );
+
 
     openSearchPanel();
 }
@@ -1476,6 +2159,7 @@ function clearFilterError() {
 
     filterError.textContent =
         "";
+
 
     filterError.classList.add(
         "hidden"
@@ -1550,6 +2234,7 @@ document.addEventListener(
             refreshing ||
             window.scrollY !== 0
         ) {
+
             return;
         }
 
@@ -1575,6 +2260,7 @@ document.addEventListener(
             refreshing ||
             window.scrollY !== 0
         ) {
+
             return;
         }
 
@@ -1602,7 +2288,10 @@ document.addEventListener(
 
 
         pullRefresh.style.transform =
-            `translate(-50%, ${-100 + (progress * 100)}%)`;
+            `translate(
+                -50%,
+                ${-100 + (progress * 100)}%
+            )`;
 
 
         if (
@@ -1613,6 +2302,7 @@ document.addEventListener(
             pullRefreshText.textContent =
                 "Release to refresh";
 
+
             pullRefreshIcon.textContent =
                 "↻";
 
@@ -1620,6 +2310,7 @@ document.addEventListener(
 
             pullRefreshText.textContent =
                 "Pull to refresh";
+
 
             pullRefreshIcon.textContent =
                 "↓";
@@ -1639,6 +2330,7 @@ document.addEventListener(
             !pulling ||
             refreshing
         ) {
+
             return;
         }
 
