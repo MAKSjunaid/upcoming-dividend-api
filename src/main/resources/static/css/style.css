@@ -63,6 +63,7 @@ body {
     position: absolute;
 
     left: 0;
+
     right: 0;
 
     bottom: -14px;
@@ -514,6 +515,488 @@ body {
 
 
 /* =========================================================
+   BEAUTIFUL LOADING ANIMATION
+   ========================================================= */
+
+.loading {
+
+    margin: 10px 12px 16px;
+
+    /*
+     * Increased height so the loading panel has approximately
+     * the vertical space of two stock cards.
+     */
+    min-height: 340px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    overflow: hidden;
+
+    position: relative;
+
+    border-radius: 22px;
+
+    background:
+        radial-gradient(
+            circle at 50% 40%,
+            rgba(255, 193, 7, 0.16),
+            transparent 48%
+        ),
+        linear-gradient(
+            145deg,
+            #ffffff,
+            #f8f9fd
+        );
+
+    border: 1px solid #e8ebf1;
+
+    box-shadow:
+        0 10px 30px rgba(25, 35, 55, 0.06),
+        inset 0 0 30px rgba(255, 193, 7, 0.03);
+
+    animation:
+        loadingAppear
+        0.45s
+        ease
+        both;
+}
+
+
+.loading::before {
+
+    content: "";
+
+    position: absolute;
+
+    width: 270px;
+
+    height: 270px;
+
+    border-radius: 50%;
+
+    border: 1px solid rgba(245, 180, 0, 0.12);
+
+    animation:
+        loadingRing
+        3s
+        linear
+        infinite;
+}
+
+
+.loading-animation {
+
+    position: relative;
+
+    z-index: 2;
+
+    width: 100%;
+
+    text-align: center;
+}
+
+
+.money-scene {
+
+    position: relative;
+
+    width: 190px;
+
+    height: 100px;
+
+    margin: 0 auto 7px;
+}
+
+
+.money-icon {
+
+    position: absolute;
+
+    display: inline-block;
+
+    user-select: none;
+
+    filter:
+        drop-shadow(
+            0 5px 6px rgba(25, 35, 55, 0.12)
+        );
+}
+
+
+.money-bag {
+
+    left: 68px;
+
+    top: 27px;
+
+    font-size: 48px;
+
+    transform-origin: center bottom;
+
+    animation:
+        moneyGiggling
+        1.35s
+        ease-in-out
+        infinite;
+}
+
+
+.coin-one {
+
+    left: 25px;
+
+    top: 45px;
+
+    font-size: 30px;
+
+    animation:
+        coinBounceOne
+        1.5s
+        ease-in-out
+        infinite;
+}
+
+
+.coin-two {
+
+    right: 23px;
+
+    top: 22px;
+
+    font-size: 27px;
+
+    animation:
+        coinBounceTwo
+        1.8s
+        ease-in-out
+        infinite;
+}
+
+
+.chart {
+
+    right: 51px;
+
+    bottom: 3px;
+
+    font-size: 34px;
+
+    transform-origin: bottom left;
+
+    animation:
+        chartRise
+        1.7s
+        ease-in-out
+        infinite;
+}
+
+
+.sparkle-one {
+
+    left: 42px;
+
+    top: 5px;
+
+    font-size: 16px;
+
+    animation:
+        sparkle
+        1.4s
+        ease-in-out
+        infinite;
+}
+
+
+.sparkle-two {
+
+    right: 31px;
+
+    top: 62px;
+
+    font-size: 14px;
+
+    animation:
+        sparkle
+        1.7s
+        ease-in-out
+        infinite 0.4s;
+}
+
+
+.loading-title {
+
+    color: #172033;
+
+    font-size: 16px;
+
+    font-weight: 800;
+
+    letter-spacing: -0.2px;
+}
+
+
+.loading-message {
+
+    min-height: 18px;
+
+    margin-top: 5px;
+
+    color: #858e9f;
+
+    font-size: 11px;
+
+    font-weight: 550;
+
+    transition:
+        opacity 0.25s ease;
+}
+
+
+.loading-dots {
+
+    display: flex;
+
+    justify-content: center;
+
+    gap: 5px;
+
+    margin-top: 8px;
+}
+
+
+.loading-dots span {
+
+    width: 5px;
+
+    height: 5px;
+
+    border-radius: 50%;
+
+    background: #f5b400;
+
+    animation:
+        loadingDot
+        1.2s
+        ease-in-out
+        infinite;
+}
+
+
+.loading-dots span:nth-child(2) {
+
+    animation-delay: 0.15s;
+}
+
+
+.loading-dots span:nth-child(3) {
+
+    animation-delay: 0.30s;
+}
+
+
+@keyframes loadingAppear {
+
+    from {
+
+        opacity: 0;
+
+        transform:
+            translateY(8px)
+            scale(0.98);
+    }
+
+    to {
+
+        opacity: 1;
+
+        transform:
+            translateY(0)
+            scale(1);
+    }
+}
+
+
+@keyframes loadingRing {
+
+    from {
+
+        transform:
+            rotate(0deg)
+            scale(0.85);
+
+        opacity: 0.4;
+    }
+
+    50% {
+
+        transform:
+            rotate(180deg)
+            scale(1);
+
+        opacity: 0.8;
+    }
+
+    to {
+
+        transform:
+            rotate(360deg)
+            scale(0.85);
+
+        opacity: 0.4;
+    }
+}
+
+
+@keyframes moneyGiggling {
+
+    0%,
+    100% {
+
+        transform:
+            rotate(0deg)
+            translateY(0);
+    }
+
+    20% {
+
+        transform:
+            rotate(-9deg)
+            translateY(-4px);
+    }
+
+    40% {
+
+        transform:
+            rotate(8deg)
+            translateY(1px);
+    }
+
+    60% {
+
+        transform:
+            rotate(-6deg)
+            translateY(-5px);
+    }
+
+    80% {
+
+        transform:
+            rotate(4deg)
+            translateY(0);
+    }
+}
+
+
+@keyframes coinBounceOne {
+
+    0%,
+    100% {
+
+        transform:
+            translateY(0)
+            rotate(0deg);
+    }
+
+    50% {
+
+        transform:
+            translateY(-17px)
+            rotate(180deg);
+    }
+}
+
+
+@keyframes coinBounceTwo {
+
+    0%,
+    100% {
+
+        transform:
+            translateY(0)
+            rotate(0deg);
+    }
+
+    50% {
+
+        transform:
+            translateY(15px)
+            rotate(-180deg);
+    }
+}
+
+
+@keyframes chartRise {
+
+    0%,
+    100% {
+
+        transform:
+            translateY(4px)
+            rotate(-4deg)
+            scale(0.94);
+    }
+
+    50% {
+
+        transform:
+            translateY(-7px)
+            rotate(2deg)
+            scale(1.06);
+    }
+}
+
+
+@keyframes sparkle {
+
+    0%,
+    100% {
+
+        opacity: 0.2;
+
+        transform:
+            scale(0.7)
+            rotate(0deg);
+    }
+
+    50% {
+
+        opacity: 1;
+
+        transform:
+            scale(1.3)
+            rotate(90deg);
+    }
+}
+
+
+@keyframes loadingDot {
+
+    0%,
+    100% {
+
+        opacity: 0.25;
+
+        transform:
+            translateY(0)
+            scale(0.8);
+    }
+
+    50% {
+
+        opacity: 1;
+
+        transform:
+            translateY(-4px)
+            scale(1.15);
+    }
+}
+
+
+/* =========================================================
    STOCK LIST
    ========================================================= */
 
@@ -664,12 +1147,6 @@ body {
     padding: 0;
 
     -webkit-tap-highlight-color: transparent;
-
-    /*
-     * Background and color are NOT animated.
-     *
-     * This makes the box change instantly.
-     */
 
     transition:
         transform 0.22s ease;
@@ -940,7 +1417,6 @@ body {
    LOADING / EMPTY
    ========================================================= */
 
-.loading,
 .empty {
 
     margin: 8px 15px;
@@ -952,16 +1428,6 @@ body {
     text-align: center;
 
     font-size: 11px;
-}
-
-
-.loading {
-
-    background: #ffffff;
-}
-
-
-.empty {
 
     color: #727c8f;
 }
@@ -970,6 +1436,30 @@ body {
 .hidden {
 
     display: none !important;
+}
+
+
+/* =========================================================
+   ERROR
+   ========================================================= */
+
+.error {
+
+    margin: 8px 15px;
+
+    padding: 10px 12px;
+
+    border-radius: 10px;
+
+    background: #fff1f1;
+
+    border: 1px solid #ffd6d6;
+
+    color: #c62828;
+
+    font-size: 12px;
+
+    font-weight: 600;
 }
 
 
@@ -1268,6 +1758,38 @@ body {
 
         font-size: 8px;
     }
+
+
+    /* Taller mobile loading panel */
+
+    .loading {
+
+        min-height: 320px;
+
+        margin-left: 11px;
+
+        margin-right: 11px;
+    }
+
+
+    .loading::before {
+
+        width: 245px;
+
+        height: 245px;
+    }
+
+
+    .money-scene {
+
+        transform: scale(0.92);
+    }
+
+
+    .loading-title {
+
+        font-size: 15px;
+    }
 }
 
 
@@ -1286,11 +1808,80 @@ body {
     .app {
 
         max-width: 560px;
+
+        /*
+         * Makes the complete application feel more like a
+         * tall mobile phone screen even on desktop.
+         */
+        min-height: calc(100vh - 40px);
     }
 
 
     .stock-card {
 
         padding: 14px;
+    }
+
+
+    /*
+     * Desktop loading panel:
+     * approximately the height of two stock cards.
+     */
+
+    .loading {
+
+        min-height: 360px;
+
+        margin-left: 12px;
+
+        margin-right: 12px;
+    }
+
+
+    .loading::before {
+
+        width: 280px;
+
+        height: 280px;
+    }
+}
+
+
+/* =========================================================
+   LARGE DESKTOP
+   ========================================================= */
+
+@media (min-width: 1000px) {
+
+    .app {
+
+        max-width: 560px;
+
+        min-height: calc(100vh - 40px);
+    }
+
+
+    .loading {
+
+        min-height: 390px;
+    }
+}
+
+
+/* =========================================================
+   REDUCE MOTION
+   ========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+
+        animation-duration: 0.01ms !important;
+
+        animation-iteration-count: 1 !important;
+
+        scroll-behavior: auto !important;
     }
 }
