@@ -31,7 +31,7 @@ public class DividendService {
     private static final DateTimeFormatter NSE_RESPONSE_DATE_FORMAT =
             DateTimeFormatter.ofPattern("dd-MMM-yyyy");
 
-    private static final int MAX_THREADS = 20;
+    private static final int MAX_THREADS = 80;
     private static final int CONNECT_TIMEOUT = 10000;
     private static final int READ_TIMEOUT = 15000;
     private static final int MAX_RETRIES = 2;
