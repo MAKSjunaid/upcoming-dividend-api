@@ -776,7 +776,11 @@ function dateToInputValue(date) {
 }
 
 
-function addOneMonth(dateValue) {
+/* =========================================================
+   ADD 15 DAYS
+   ========================================================= */
+
+function addFifteenDays(dateValue) {
 
     const parts =
         dateValue.split("-");
@@ -800,8 +804,8 @@ function addOneMonth(dateValue) {
         );
 
 
-    date.setMonth(
-        date.getMonth() + 1
+    date.setDate(
+        date.getDate() + 15
     );
 
 
@@ -836,7 +840,7 @@ function resolveDates() {
             tomorrow;
 
         selectedTo =
-            addOneMonth(
+            addFifteenDays(
                 selectedFrom
             );
 
@@ -846,7 +850,7 @@ function resolveDates() {
     ) {
 
         selectedTo =
-            addOneMonth(
+            addFifteenDays(
                 selectedFrom
             );
 
@@ -2271,8 +2275,8 @@ function setDefaultDates() {
         );
 
 
-    const oneMonthLater =
-        addOneMonth(
+    const fifteenDaysLater =
+        addFifteenDays(
             tomorrowValue
         );
 
@@ -2282,7 +2286,7 @@ function setDefaultDates() {
 
 
     toDate.value =
-        oneMonthLater;
+        fifteenDaysLater;
 }
 
 
