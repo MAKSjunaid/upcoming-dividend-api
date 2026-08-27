@@ -1,77 +1,64 @@
 package com.example.upcomingdividendapi;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
-@JsonPropertyOrder({
-        "from_date",
-        "to_date",
-        "share_name",
-        "symbol",
-        "ex_dividend_date",
-        "dividend_amount",
-        "current_share_price"
-})
 public class DividendResponse {
 
-    private String fromDate;
-    private String toDate;
+    @JsonProperty("share_name")
     private String shareName;
+
+    @JsonProperty("symbol")
     private String symbol;
-    private String exDividendDate;
+
+    @JsonProperty("ex_dividend_date")
+    private String exDate;
+
+    @JsonProperty("dividend_amount")
     private Double dividendAmount;
+
+    @JsonProperty("current_share_price")
     private Double currentSharePrice;
 
+    @JsonProperty("previous_share_price")
+    private Double previousSharePrice;
+
     public DividendResponse(
-            String fromDate,
-            String toDate,
             String shareName,
             String symbol,
-            String exDividendDate,
+            String exDate,
             Double dividendAmount,
-            Double currentSharePrice) {
+            Double currentSharePrice,
+            Double previousSharePrice) {
 
-        this.fromDate = fromDate;
-        this.toDate = toDate;
         this.shareName = shareName;
         this.symbol = symbol;
-        this.exDividendDate = exDividendDate;
+        this.exDate = exDate;
         this.dividendAmount = dividendAmount;
         this.currentSharePrice = currentSharePrice;
+        this.previousSharePrice = previousSharePrice;
     }
 
-    @JsonProperty("from_date")
-    public String getFromDate() {
-        return fromDate;
-    }
-
-    @JsonProperty("to_date")
-    public String getToDate() {
-        return toDate;
-    }
-
-    @JsonProperty("share_name")
     public String getShareName() {
         return shareName;
     }
 
-    @JsonProperty("symbol")
     public String getSymbol() {
         return symbol;
     }
 
-    @JsonProperty("ex_dividend_date")
-    public String getExDividendDate() {
-        return exDividendDate;
+    public String getExDate() {
+        return exDate;
     }
 
-    @JsonProperty("dividend_amount")
     public Double getDividendAmount() {
         return dividendAmount;
     }
 
-    @JsonProperty("current_share_price")
     public Double getCurrentSharePrice() {
         return currentSharePrice;
+    }
+
+    public Double getPreviousSharePrice() {
+        return previousSharePrice;
     }
 }
