@@ -10,184 +10,690 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.text.DecimalFormat;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
 public class DividendService {
 
+    // ============================================================
+    // CONFIGURATION
+    // ============================================================
+
+    /*
+     * Yahoo supports multiple symbols in one Spark request.
+     */
+    private static final int YAHOO_BATCH_SIZE = 20;
+
+    /*
+     * Number of parallel API requests.
+     */
+    private static final int THREAD_COUNT = 8;
+
+    /*
+     * HTTP connection timeout.
+     */
+    private static final int CONNECT_TIMEOUT = 10000;
+
+    /*
+     * HTTP read timeout.
+     */
+    private static final int READ_TIMEOUT = 15000;
+
+
+    // ============================================================
+    // DATE FORMATTERS
+    // ============================================================
+
     private static final DateTimeFormatter API_DATE_FORMAT =
             DateTimeFormatter.ofPattern("dd-MM-yyyy");
 
     private static final DateTimeFormatter NSE_RESPONSE_DATE_FORMAT =
-            DateTimeFormatter.ofPattern("dd-MMM-yyyy");
+            DateTimeFormatter.ofPattern(
+                    "dd-MMM-yyyy",
+                    Locale.ENGLISH
+            );
 
-    private static final int MAX_THREADS = 20;
-    private static final int CONNECT_TIMEOUT = 10000;
-    private static final int READ_TIMEOUT = 15000;
-    private static final int MAX_RETRIES = 2;
-    private static final double SORTING_INVESTMENT_AMOUNT = 200000;
+
+    // ============================================================
+    // REGEX
+    // ============================================================
 
     private static final Pattern DIVIDEND_PATTERN =
             Pattern.compile(
-                    "(?i)\\bR(?:s|e)\\.?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*Per\\s*(?:(\\d+(?:\\.\\d+)?)\\s*)?Share(?:s)?"
+                    "(?i)\\bR(?:s|e)\\.?\\s*"
+                            + "([0-9]+(?:\\.[0-9]+)?)"
             );
 
+    private static final Pattern RUPEE_PATTERN =
+            Pattern.compile(
+                    "₹\\s*([0-9]+(?:\\.[0-9]+)?)"
+            );
+
+
+    // ============================================================
+    // MAIN METHOD
+    // ============================================================
+
     public List<DividendResponse> getUpcomingDividends(
-            DividendRequest request) throws Exception {
+            DividendRequest request
+    ) throws Exception {
+
+        // ========================================================
+        // 1. READ REQUEST DATES
+        // ========================================================
 
         String requestedFromDate =
-                request != null ? request.getFromDate() : null;
+                request != null
+                        ? request.getFromDate()
+                        : null;
 
         String requestedToDate =
-                request != null ? request.getToDate() : null;
+                request != null
+                        ? request.getToDate()
+                        : null;
+
+
+        // ========================================================
+        // 2. FROM DATE
+        // ========================================================
 
         LocalDate fromDateValue;
 
         if (isEmpty(requestedFromDate)) {
-            fromDateValue = LocalDate.now().plusDays(1);
+
+            fromDateValue =
+                    LocalDate.now().plusDays(1);
+
         } else {
-            fromDateValue = parseDate(
-                    requestedFromDate,
-                    "from_date"
-            );
+
+            fromDateValue =
+                    parseDate(
+                            requestedFromDate,
+                            "from_date"
+                    );
         }
+
+
+        // ========================================================
+        // 3. TO DATE
+        // ========================================================
 
         LocalDate toDateValue;
 
         if (isEmpty(requestedToDate)) {
-            toDateValue = fromDateValue.plusMonths(1);
+
+            toDateValue =
+                    fromDateValue.plusMonths(1);
+
         } else {
-            toDateValue = parseDate(
-                    requestedToDate,
-                    "to_date"
-            );
+
+            toDateValue =
+                    parseDate(
+                            requestedToDate,
+                            "to_date"
+                    );
         }
 
+
+        // ========================================================
+        // 4. VALIDATE DATE RANGE
+        // ========================================================
+
         if (toDateValue.isBefore(fromDateValue)) {
+
             throw new IllegalArgumentException(
                     "to_date cannot be earlier than from_date"
             );
         }
 
-        String fromDate =
-                fromDateValue.format(API_DATE_FORMAT);
 
-        String toDate =
-                toDateValue.format(API_DATE_FORMAT);
+        // ========================================================
+        // 5. FORMAT API DATES
+        // ========================================================
+
+        String nseFromDate =
+                fromDateValue.format(
+                        API_DATE_FORMAT
+                );
+
+        String nseToDate =
+                toDateValue.format(
+                        API_DATE_FORMAT
+                );
+
+        String growwFromDate =
+                fromDateValue.toString();
+
+        String growwToDate =
+                toDateValue.toString();
+
+
+        // ========================================================
+        // 6. CREATE API URLS
+        // ========================================================
 
         String nseApiUrl =
-                "https://www.nseindia.com/api/corporates-corporateActions"
+                "https://www.nseindia.com/api/"
+                        + "corporates-corporateActions"
                         + "?index=equities"
-                        + "&from_date=" + fromDate
-                        + "&to_date=" + toDate
+                        + "&from_date=" + nseFromDate
+                        + "&to_date=" + nseToDate
                         + "&category=dividend";
 
-        String nseResponse =
-                fetchWithRetry(nseApiUrl, true);
 
-        List<DividendData> dividendShares =
-                extractDividendShares(
-                        nseResponse,
-                        fromDateValue,
-                        toDateValue
-                );
+        String growwApiUrl =
+                "https://groww.in/v1/api/"
+                        + "stocks_data/equity_feature/v2/"
+                        + "corporate_action/event"
+                        + "?from=" + growwFromDate
+                        + "&to=" + growwToDate;
 
-        if (dividendShares.isEmpty()) {
-            return new ArrayList<>();
-        }
 
-        int threadCount =
-                Math.min(
-                        MAX_THREADS,
-                        Math.max(1, dividendShares.size())
-                );
+        // ========================================================
+        // 7. THREAD POOL
+        // ========================================================
 
         ExecutorService executor =
-                Executors.newFixedThreadPool(threadCount);
+                Executors.newFixedThreadPool(
+                        THREAD_COUNT
+                );
+
 
         try {
-            List<Future<?>> futures =
-                    new ArrayList<>(dividendShares.size());
 
-            for (DividendData share : dividendShares) {
-                futures.add(
-                        executor.submit(
-                                () -> fetchSharePrice(share)
+            // ====================================================
+            // 8. FETCH NSE + GROWW IN PARALLEL
+            // ====================================================
+
+            CompletableFuture<String> nseFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+
+                                try {
+
+                                    return fetchNseResponse(
+                                            nseApiUrl
+                                    );
+
+                                } catch (Exception e) {
+
+                                    System.out.println(
+                                            "NSE API failed: "
+                                                    + e.getMessage()
+                                    );
+
+                                    return null;
+                                }
+
+                            },
+                            executor
+                    );
+
+
+            CompletableFuture<String> growwFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+
+                                try {
+
+                                    return fetchGrowwResponse(
+                                            growwApiUrl
+                                    );
+
+                                } catch (Exception e) {
+
+                                    System.out.println(
+                                            "Groww API failed: "
+                                                    + e.getMessage()
+                                    );
+
+                                    return null;
+                                }
+
+                            },
+                            executor
+                    );
+
+
+            // ====================================================
+            // 9. WAIT FOR BOTH
+            // ====================================================
+
+            CompletableFuture.allOf(
+                    nseFuture,
+                    growwFuture
+            ).join();
+
+
+            String nseResponse =
+                    nseFuture.join();
+
+            String growwResponse =
+                    growwFuture.join();
+
+
+            // ====================================================
+            // 10. PARSE NSE
+            // ====================================================
+
+            List<DividendData> nseDividendShares =
+                    nseResponse == null
+                            ? new ArrayList<>()
+                            : extractNseDividendShares(
+                            nseResponse,
+                            fromDateValue,
+                            toDateValue
+                    );
+
+
+            // ====================================================
+            // 11. PARSE GROWW
+            // ====================================================
+
+            List<DividendData> growwDividendShares =
+                    growwResponse == null
+                            ? new ArrayList<>()
+                            : extractGrowwDividendShares(
+                            growwResponse,
+                            fromDateValue,
+                            toDateValue
+                    );
+
+
+            // ====================================================
+            // 12. MERGE NSE + GROWW
+            // ====================================================
+
+            List<DividendData> dividendShares =
+                    mergeAndRemoveDuplicates(
+                            nseDividendShares,
+                            growwDividendShares
+                    );
+
+
+            // ====================================================
+            // 13. ADD MOCK DATA
+            // ====================================================
+            //
+            // IMPORTANT:
+            //
+            // MockData.hasMockData() is the FLAG.
+            //
+            // true:
+            //     MockData contains at least one field with data.
+            //
+            // false:
+            //     MockData contains no data.
+            //
+            // Mock data is added directly.
+            //
+            // It does NOT call:
+            //
+            //     NSE
+            //     Groww
+            //     Yahoo
+            //
+            // for its values.
+            // ====================================================
+
+            if (MockData.hasMockData()) {
+
+                List<DividendData> mockDividendShares =
+                        convertMockDataToDividendData();
+
+                dividendShares.addAll(
+                        mockDividendShares
+                );
+            }
+
+
+            // ====================================================
+            // 14. NO DATA
+            // ====================================================
+
+            if (dividendShares.isEmpty()) {
+
+                return new ArrayList<>();
+            }
+
+
+            // ====================================================
+            // 15. FETCH YAHOO PRICES
+            // ====================================================
+            //
+            // IMPORTANT:
+            //
+            // Only records WITHOUT an existing current price
+            // are sent to Yahoo.
+            //
+            // Mock records that already have a current price
+            // are NOT changed.
+            //
+            // Example:
+            //
+            // Mock:
+            // currentSharePrice = 450
+            //
+            // Yahoo is NOT called to replace 450.
+            //
+            // ====================================================
+
+            fetchYahooSparkPricesInParallel(
+                    dividendShares,
+                    executor
+            );
+
+
+            // ====================================================
+            // 16. REMOVE SHARES WITHOUT CURRENT PRICE
+            // ====================================================
+            //
+            // IMPORTANT:
+            //
+            // Normal NSE/Groww records without Yahoo price
+            // are removed.
+            //
+            // Mock records are NOT removed here just because
+            // their price is missing.
+            //
+            // This allows partial mock data.
+            // ====================================================
+
+            dividendShares.removeIf(
+                    share -> {
+
+                        if (share == null) {
+
+                            return true;
+                        }
+
+
+                        /*
+                         * Mock records are allowed to have
+                         * missing current price.
+                         */
+                        if ("MOCK".equalsIgnoreCase(
+                                share.source
+                        )) {
+
+                            return false;
+                        }
+
+
+                        /*
+                         * Existing NSE/Groww behavior.
+                         */
+                        return isEmpty(
+                                share.currentSharePrice
+                        )
+                                || "N/A".equalsIgnoreCase(
+                                share.currentSharePrice
+                        );
+                    }
+            );
+
+
+            // ====================================================
+            // 17. NO VALID DATA
+            // ====================================================
+
+            if (dividendShares.isEmpty()) {
+
+                return new ArrayList<>();
+            }
+
+
+            // ====================================================
+            // 18. CREATE RESPONSE
+            // ====================================================
+
+            List<DividendResponse> response =
+                    new ArrayList<>(
+                            dividendShares.size()
+                    );
+
+
+            for (DividendData share :
+                    dividendShares) {
+
+                if (share == null) {
+
+                    continue;
+                }
+
+
+                // ------------------------------------------------
+                // Convert values
+                // ------------------------------------------------
+
+                Double dividendAmount =
+                        parseDoubleOrNull(
+                                share.dividendAmount
+                        );
+
+
+                Double currentPrice =
+                        parseDoubleOrNull(
+                                share.currentSharePrice
+                        );
+
+
+                Double previousPrice =
+                        parseDoubleOrNull(
+                                share.chartPreviousClose
+                        );
+
+
+                // ------------------------------------------------
+                // Current price MUST exist for normal data.
+                //
+                // Mock data is allowed to have null price.
+                // ------------------------------------------------
+
+                if (currentPrice == null
+                        && !"MOCK".equalsIgnoreCase(
+                        share.source
+                )) {
+
+                    continue;
+                }
+
+
+                // ------------------------------------------------
+                // Add response
+                // ------------------------------------------------
+
+                response.add(
+                        new DividendResponse(
+                                share.shareName,
+                                share.symbol,
+                                share.exDate,
+                                dividendAmount,
+                                currentPrice,
+                                previousPrice
                         )
                 );
             }
 
-            for (Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (Exception ignored) {
-                }
-            }
+
+            return response;
+
 
         } finally {
+
             executor.shutdown();
-
-            try {
-                if (!executor.awaitTermination(
-                        30,
-                        TimeUnit.SECONDS)) {
-
-                    executor.shutdownNow();
-                }
-
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
         }
-
-        dividendShares.sort(
-                Comparator.comparingDouble(
-                        (DividendData share) ->
-                                share.expectedDividendForSorting
-                ).reversed()
-        );
-
-        List<DividendResponse> response =
-                new ArrayList<>(dividendShares.size());
-
-        for (DividendData share : dividendShares) {
-            response.add(
-                    new DividendResponse(
-                            fromDate,
-                            toDate,
-                            share.shareName,
-                            share.symbol,
-                            share.exDate,
-                            share.dividendAmount,
-                            share.currentSharePrice
-                    )
-            );
-        }
-
-        return response;
     }
+
+
+    // ============================================================
+    // CONVERT MOCK DATA
+    // ============================================================
+
+    /*
+     * Converts MockData.MockDividend into the same internal
+     * DividendData structure used by NSE and Groww.
+     *
+     * This means the frontend does not need to know whether
+     * the record came from NSE, Groww or MockData.
+     */
+    private List<DividendData>
+    convertMockDataToDividendData() {
+
+        List<DividendData> result =
+                new ArrayList<>();
+
+
+        List<MockData.MockDividend> mockDividends =
+                MockData.getMockDividends();
+
+
+        if (mockDividends == null
+                || mockDividends.isEmpty()) {
+
+            return result;
+        }
+
+
+        for (MockData.MockDividend mock :
+                mockDividends) {
+
+            if (mock == null) {
+
+                continue;
+            }
+
+
+            /*
+             * If the individual mock record is completely empty,
+             * do not send it to the frontend.
+             */
+            if (!hasAnyMockData(mock)) {
+
+                continue;
+            }
+
+
+            DividendData data =
+                    new DividendData();
+
+
+            data.shareName =
+                    mock.getShareName();
+
+            data.symbol =
+                    normalizeSymbol(
+                            mock.getSymbol()
+                    );
+
+            data.exDate =
+                    mock.getExDate();
+
+            data.dividendAmount =
+                    formatMockNumber(
+                            mock.getDividendAmount()
+                    );
+
+            data.currentSharePrice =
+                    formatMockNumber(
+                            mock.getCurrentSharePrice()
+                    );
+
+            data.chartPreviousClose =
+                    formatMockNumber(
+                            mock.getPreviousSharePrice()
+                    );
+
+            data.source =
+                    "MOCK";
+
+
+            result.add(data);
+        }
+
+
+        return result;
+    }
+
+
+    // ============================================================
+    // CHECK ONE MOCK RECORD
+    // ============================================================
+
+    private boolean hasAnyMockData(
+            MockData.MockDividend mock
+    ) {
+
+        if (mock == null) {
+
+            return false;
+        }
+
+
+        return !isEmpty(mock.getShareName())
+                || !isEmpty(mock.getSymbol())
+                || !isEmpty(mock.getExDate())
+                || mock.getDividendAmount() != null
+                || mock.getCurrentSharePrice() != null
+                || mock.getPreviousSharePrice() != null;
+    }
+
+
+    // ============================================================
+    // FORMAT MOCK NUMBER
+    // ============================================================
+
+    private String formatMockNumber(
+            Double value
+    ) {
+
+        if (value == null) {
+
+            return null;
+        }
+
+
+        if (Double.isNaN(value)
+                || Double.isInfinite(value)) {
+
+            return null;
+        }
+
+
+        return formatPrice(value);
+    }
+
+
+    // ============================================================
+    // PARSE DATE
+    // ============================================================
 
     private LocalDate parseDate(
             String date,
-            String fieldName) {
+            String fieldName
+    ) {
 
         try {
+
             return LocalDate.parse(
                     date.trim(),
                     API_DATE_FORMAT
             );
+
         } catch (Exception e) {
+
             throw new IllegalArgumentException(
                     "Invalid "
                             + fieldName
@@ -196,419 +702,1422 @@ public class DividendService {
         }
     }
 
-    private void fetchSharePrice(
-            DividendData share) {
 
-        try {
-            if (share == null || isEmpty(share.symbol)) {
-                return;
-            }
+    // ============================================================
+    // NSE REQUEST
+    // ============================================================
 
-            String yahooApiUrl =
-                    "https://query1.finance.yahoo.com/v8/finance/chart/"
-                            + share.symbol.trim()
-                            + ".NS?interval=1m&range=1d";
+    private String fetchNseResponse(
+            String apiUrl
+    ) throws Exception {
 
-            String yahooResponse =
-                    fetchWithRetry(yahooApiUrl, false);
-
-            Double price =
-                    extractCurrentSharePrice(yahooResponse);
-
-            share.currentSharePrice = price;
-
-            share.expectedDividendForSorting =
-                    calculateExpectedDividend(
-                            price,
-                            share.dividendAmount,
-                            SORTING_INVESTMENT_AMOUNT
-                    );
-
-        } catch (Exception e) {
-            share.currentSharePrice = null;
-            share.expectedDividendForSorting = 0;
-        }
-    }
-
-    private String fetchWithRetry(
-            String apiUrl,
-            boolean nseRequest) throws Exception {
-
-        Exception lastException = null;
-
-        for (int attempt = 0;
-             attempt <= MAX_RETRIES;
-             attempt++) {
-
-            HttpURLConnection connection = null;
-
-            try {
-                connection =
-                        (HttpURLConnection)
-                                new URL(apiUrl).openConnection();
-
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(CONNECT_TIMEOUT);
-                connection.setReadTimeout(READ_TIMEOUT);
-                connection.setUseCaches(false);
-
-                connection.setRequestProperty(
-                        "User-Agent",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-                );
-
-                connection.setRequestProperty(
-                        "Accept",
-                        "application/json, text/plain, */*"
-                );
-
-                if (nseRequest) {
-                    connection.setRequestProperty(
-                            "Accept-Language",
-                            "en-US,en;q=0.9"
-                    );
-
-                    connection.setRequestProperty(
-                            "Referer",
-                            "https://www.nseindia.com/"
-                    );
-                }
-
-                int responseCode =
-                        connection.getResponseCode();
-
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    return readResponse(connection);
-                }
-
-                lastException =
-                        new Exception(
-                                "API failed. Response Code: "
-                                        + responseCode
-                        );
-
-            } catch (Exception e) {
-                lastException = e;
-
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
-
-            if (attempt < MAX_RETRIES) {
-                try {
-                    Thread.sleep(
-                            500L * (attempt + 1)
-                    );
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new Exception(
-                            "API request interrupted",
-                            e
-                    );
-                }
-            }
-        }
-
-        throw new Exception(
-                "API request failed after "
-                        + (MAX_RETRIES + 1)
-                        + " attempts",
-                lastException
+        return fetchResponse(
+                apiUrl,
+                "https://www.nseindia.com/"
         );
     }
 
-    private String readResponse(
-            HttpURLConnection connection) throws Exception {
 
-        StringBuilder response =
-                new StringBuilder();
+    // ============================================================
+    // GROWW REQUEST
+    // ============================================================
 
-        try (BufferedReader reader =
-                     new BufferedReader(
-                             new InputStreamReader(
-                                     connection.getInputStream()
-                             )
-                     )) {
+    private String fetchGrowwResponse(
+            String apiUrl
+    ) throws Exception {
 
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                response.append(line);
-            }
-        }
-
-        return response.toString();
+        return fetchResponse(
+                apiUrl,
+                "https://groww.in/"
+        );
     }
 
-    private List<DividendData> extractDividendShares(
+
+    // ============================================================
+    // YAHOO REQUEST
+    // ============================================================
+
+    private String fetchYahooResponse(
+            String apiUrl
+    ) throws Exception {
+
+        return fetchResponse(
+                apiUrl,
+                null
+        );
+    }
+
+
+    // ============================================================
+    // COMMON HTTP REQUEST
+    // ============================================================
+
+    private String fetchResponse(
+            String apiUrl,
+            String referer
+    ) throws Exception {
+
+        HttpURLConnection connection =
+                (HttpURLConnection)
+                        new URL(apiUrl)
+                                .openConnection();
+
+
+        connection.setRequestMethod("GET");
+
+        connection.setConnectTimeout(
+                CONNECT_TIMEOUT
+        );
+
+        connection.setReadTimeout(
+                READ_TIMEOUT
+        );
+
+        connection.setUseCaches(false);
+
+        connection.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0"
+        );
+
+        connection.setRequestProperty(
+                "Accept",
+                "application/json, text/plain, */*"
+        );
+
+        connection.setRequestProperty(
+                "Accept-Language",
+                "en-US,en;q=0.9"
+        );
+
+
+        if (referer != null) {
+
+            connection.setRequestProperty(
+                    "Referer",
+                    referer
+            );
+        }
+
+
+        try {
+
+            int responseCode =
+                    connection.getResponseCode();
+
+
+            if (responseCode
+                    != HttpURLConnection.HTTP_OK) {
+
+                throw new Exception(
+                        "API failed. HTTP "
+                                + responseCode
+                );
+            }
+
+
+            StringBuilder response =
+                    new StringBuilder();
+
+
+            try (
+                    BufferedReader reader =
+                            new BufferedReader(
+                                    new InputStreamReader(
+                                            connection.getInputStream()
+                                    )
+                            )
+            ) {
+
+                String line;
+
+                while (
+                        (line = reader.readLine())
+                                != null
+                ) {
+
+                    response.append(line);
+                }
+            }
+
+
+            return response.toString();
+
+
+        } finally {
+
+            connection.disconnect();
+        }
+    }
+
+
+    // ============================================================
+    // NSE PARSER
+    // ============================================================
+
+    private List<DividendData>
+    extractNseDividendShares(
             String response,
             LocalDate fromDate,
-            LocalDate toDate) {
+            LocalDate toDate
+    ) {
 
         List<DividendData> dividendShares =
                 new ArrayList<>();
 
+
         if (isEmpty(response)) {
+
             return dividendShares;
         }
 
+
         try {
+
             JsonElement root =
-                    JsonParser.parseString(response);
+                    JsonParser.parseString(
+                            response
+                    );
+
 
             if (!root.isJsonArray()) {
+
                 return dividendShares;
             }
+
 
             JsonArray jsonArray =
                     root.getAsJsonArray();
 
-            for (JsonElement element : jsonArray) {
 
-                if (element == null
-                        || !element.isJsonObject()) {
-                    continue;
-                }
+            for (JsonElement element :
+                    jsonArray) {
 
                 try {
-                    JsonObject record =
-                            element.getAsJsonObject();
 
-                    String subject =
-                            getStringValue(record, "subject");
+                    if (element == null
+                            || !element.isJsonObject()) {
 
-                    String symbol =
-                            getStringValue(record, "symbol");
-
-                    String shareName =
-                            getStringValue(record, "comp");
-
-                    String exDate =
-                            getStringValue(record, "exDate");
-
-                    if (isEmpty(subject)
-                            || !subject.toLowerCase()
-                            .contains("dividend")
-                            || isEmpty(symbol)
-                            || isEmpty(exDate)) {
                         continue;
                     }
 
+
+                    JsonObject record =
+                            element.getAsJsonObject();
+
+
+                    String subject =
+                            getStringValue(
+                                    record,
+                                    "subject"
+                            );
+
+
+                    String symbol =
+                            getStringValue(
+                                    record,
+                                    "symbol"
+                            );
+
+
+                    String shareName =
+                            getStringValue(
+                                    record,
+                                    "comp"
+                            );
+
+
+                    String exDate =
+                            getStringValue(
+                                    record,
+                                    "exDate"
+                            );
+
+
+                    if (isEmpty(subject)
+                            || isEmpty(symbol)
+                            || isEmpty(exDate)) {
+
+                        continue;
+                    }
+
+
+                    if (!subject
+                            .toLowerCase(
+                                    Locale.ENGLISH
+                            )
+                            .contains("dividend")) {
+
+                        continue;
+                    }
+
+
                     LocalDate parsedExDate;
 
+
                     try {
+
                         parsedExDate =
                                 LocalDate.parse(
                                         exDate.trim(),
                                         NSE_RESPONSE_DATE_FORMAT
                                 );
+
                     } catch (Exception e) {
+
                         continue;
                     }
+
 
                     if (parsedExDate.isBefore(fromDate)
                             || parsedExDate.isAfter(toDate)) {
+
                         continue;
                     }
 
-                    DividendData dividendData =
+
+                    String dividendAmount =
+                            extractDividendAmount(
+                                    subject
+                            );
+
+
+                    if ("N/A".equalsIgnoreCase(
+                            dividendAmount
+                    )) {
+
+                        continue;
+                    }
+
+
+                    DividendData data =
                             new DividendData();
 
-                    dividendData.shareName = shareName;
-                    dividendData.symbol = symbol.trim();
-                    dividendData.exDate = exDate.trim();
-                    dividendData.dividendAmount =
-                            extractDividendAmount(subject);
 
-                    dividendShares.add(dividendData);
+                    data.shareName =
+                            shareName;
 
-                } catch (Exception ignored) {
+                    data.symbol =
+                            normalizeSymbol(
+                                    symbol
+                            );
+
+                    data.exDate =
+                            exDate.trim();
+
+                    data.dividendDetails =
+                            subject;
+
+                    data.dividendAmount =
+                            dividendAmount;
+
+                    data.source =
+                            "NSE";
+
+
+                    dividendShares.add(data);
+
+
+                } catch (Exception e) {
+
+                    System.out.println(
+                            "NSE record parsing failed: "
+                                    + e.getMessage()
+                    );
                 }
             }
 
-        } catch (Exception ignored) {
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "NSE parsing failed: "
+                            + e.getMessage()
+            );
         }
+
 
         return dividendShares;
     }
 
-    private Double extractDividendAmount(String subject) {
 
-        if (isEmpty(subject)) {
-            return null;
-        }
+    // ============================================================
+    // GROWW PARSER
+    // ============================================================
 
-        try {
-            String normalizedSubject =
-                    subject.replace('\u00A0', ' ')
-                            .replaceAll("\\s+", " ")
-                            .trim();
+    private List<DividendData>
+    extractGrowwDividendShares(
+            String response,
+            LocalDate fromDate,
+            LocalDate toDate
+    ) {
 
-            Matcher matcher =
-                    DIVIDEND_PATTERN.matcher(
-                            normalizedSubject
-                    );
+        List<DividendData> dividendShares =
+                new ArrayList<>();
 
-            if (matcher.find()) {
-                double dividendAmount =
-                        Double.parseDouble(matcher.group(1));
-
-                String shareCount =
-                        matcher.group(2);
-
-                if (!isEmpty(shareCount)) {
-                    double numberOfShares =
-                            Double.parseDouble(shareCount);
-
-                    if (numberOfShares > 0) {
-                        return dividendAmount / numberOfShares;
-                    }
-                }
-
-                return dividendAmount;
-            }
-
-        } catch (Exception ignored) {
-        }
-
-        return null;
-    }
-
-    private Double extractCurrentSharePrice(
-            String response) {
 
         if (isEmpty(response)) {
-            return null;
+
+            return dividendShares;
         }
+
 
         try {
-            JsonElement rootElement =
-                    JsonParser.parseString(response);
-
-            if (!rootElement.isJsonObject()) {
-                return null;
-            }
 
             JsonObject root =
-                    rootElement.getAsJsonObject();
+                    JsonParser.parseString(
+                            response
+                    ).getAsJsonObject();
 
-            if (!root.has("chart")
-                    || root.get("chart").isJsonNull()
-                    || !root.get("chart").isJsonObject()) {
-                return null;
+
+            JsonArray exdateEvents =
+                    root.getAsJsonArray(
+                            "exdateEvents"
+                    );
+
+
+            if (exdateEvents == null) {
+
+                return dividendShares;
             }
 
-            JsonObject chart =
-                    root.getAsJsonObject("chart");
 
-            if (!chart.has("result")
-                    || chart.get("result").isJsonNull()
-                    || !chart.get("result").isJsonArray()) {
-                return null;
+            for (JsonElement element :
+                    exdateEvents) {
+
+                try {
+
+                    if (element == null
+                            || !element.isJsonObject()) {
+
+                        continue;
+                    }
+
+
+                    JsonObject event =
+                            element.getAsJsonObject();
+
+
+                    String type =
+                            getStringValue(
+                                    event,
+                                    "type"
+                            );
+
+
+                    String corporateEventFilter =
+                            getStringValue(
+                                    event,
+                                    "corporateEventFilter"
+                            );
+
+
+                    if (!"DIVIDEND".equalsIgnoreCase(type)
+                            || !"DIVIDEND".equalsIgnoreCase(
+                            corporateEventFilter
+                    )) {
+
+                        continue;
+                    }
+
+
+                    String shareName =
+                            getStringValue(
+                                    event,
+                                    "companyShortName"
+                            );
+
+
+                    String symbol =
+                            getStringValue(
+                                    event,
+                                    "nseSymbol"
+                            );
+
+
+                    String dividendDetails =
+                            getStringValue(
+                                    event,
+                                    "details"
+                            );
+
+
+                    String exDate =
+                            getGrowwExDate(
+                                    event
+                            );
+
+
+                    if (isEmpty(shareName)
+                            || isEmpty(symbol)
+                            || isEmpty(dividendDetails)
+                            || isEmpty(exDate)) {
+
+                        continue;
+                    }
+
+
+                    LocalDate parsedExDate =
+                            parseGrowwDate(
+                                    exDate
+                            );
+
+
+                    if (parsedExDate == null) {
+
+                        continue;
+                    }
+
+
+                    if (parsedExDate.isBefore(fromDate)
+                            || parsedExDate.isAfter(toDate)) {
+
+                        continue;
+                    }
+
+
+                    String dividendAmount =
+                            extractDividendAmount(
+                                    dividendDetails
+                            );
+
+
+                    if ("N/A".equalsIgnoreCase(
+                            dividendAmount
+                    )) {
+
+                        continue;
+                    }
+
+
+                    DividendData data =
+                            new DividendData();
+
+
+                    data.shareName =
+                            shareName;
+
+                    data.symbol =
+                            normalizeSymbol(
+                                    symbol
+                            );
+
+                    data.exDate =
+                            parsedExDate.format(
+                                    NSE_RESPONSE_DATE_FORMAT
+                            );
+
+                    data.dividendDetails =
+                            dividendDetails;
+
+                    data.dividendAmount =
+                            dividendAmount;
+
+                    data.source =
+                            "GROWW";
+
+
+                    dividendShares.add(data);
+
+
+                } catch (Exception e) {
+
+                    System.out.println(
+                            "Groww record parsing failed: "
+                                    + e.getMessage()
+                    );
+                }
             }
 
-            JsonArray result =
-                    chart.getAsJsonArray("result");
-
-            if (result.size() == 0
-                    || result.get(0).isJsonNull()
-                    || !result.get(0).isJsonObject()) {
-                return null;
-            }
-
-            JsonObject firstResult =
-                    result.get(0).getAsJsonObject();
-
-            if (!firstResult.has("meta")
-                    || firstResult.get("meta").isJsonNull()
-                    || !firstResult.get("meta").isJsonObject()) {
-                return null;
-            }
-
-            JsonObject meta =
-                    firstResult.getAsJsonObject("meta");
-
-            if (!meta.has("regularMarketPrice")
-                    || meta.get("regularMarketPrice")
-                    .isJsonNull()) {
-                return null;
-            }
-
-            double price =
-                    meta.get("regularMarketPrice")
-                            .getAsDouble();
-
-            if (price <= 0
-                    || Double.isNaN(price)
-                    || Double.isInfinite(price)) {
-                return null;
-            }
-
-            return price;
 
         } catch (Exception e) {
-            return null;
+
+            System.out.println(
+                    "Groww parsing failed: "
+                            + e.getMessage()
+            );
         }
+
+
+        return dividendShares;
     }
 
-    private double calculateExpectedDividend(
-            Double sharePrice,
-            Double dividendAmount,
-            double investmentAmount) {
 
-        if (sharePrice == null
-                || dividendAmount == null
-                || sharePrice <= 0
-                || dividendAmount < 0
-                || investmentAmount <= 0) {
-            return 0;
-        }
+    // ============================================================
+    // MERGE + DEDUPLICATE
+    // ============================================================
 
-        double sharesCanBuy =
-                Math.floor(
-                        investmentAmount / sharePrice
+    private List<DividendData>
+    mergeAndRemoveDuplicates(
+            List<DividendData> nseDividendShares,
+            List<DividendData> growwDividendShares
+    ) {
+
+        /*
+         * LinkedHashMap preserves insertion order.
+         *
+         * NSE is inserted first.
+         * Therefore NSE gets priority.
+         */
+        Map<String, DividendData> uniqueShares =
+                new LinkedHashMap<>();
+
+
+        if (nseDividendShares != null) {
+
+            for (DividendData share :
+                    nseDividendShares) {
+
+                if (!isValidDividendData(share)) {
+
+                    continue;
+                }
+
+
+                String symbol =
+                        normalizeSymbol(
+                                share.symbol
+                        );
+
+
+                uniqueShares.putIfAbsent(
+                        symbol,
+                        share
                 );
+            }
+        }
 
-        return sharesCanBuy * dividendAmount;
+
+        if (growwDividendShares != null) {
+
+            for (DividendData share :
+                    growwDividendShares) {
+
+                if (!isValidDividendData(share)) {
+
+                    continue;
+                }
+
+
+                String symbol =
+                        normalizeSymbol(
+                                share.symbol
+                        );
+
+
+                uniqueShares.putIfAbsent(
+                        symbol,
+                        share
+                );
+            }
+        }
+
+
+        return new ArrayList<>(
+                uniqueShares.values()
+        );
     }
 
-    private String getStringValue(
+
+    // ============================================================
+    // VALID DIVIDEND DATA
+    // ============================================================
+
+    private boolean isValidDividendData(
+            DividendData share
+    ) {
+
+        return share != null
+                && !isEmpty(share.symbol)
+                && !isEmpty(share.dividendAmount)
+                && !"N/A".equalsIgnoreCase(
+                share.dividendAmount
+        );
+    }
+
+
+    // ============================================================
+    // YAHOO PARALLEL PROCESSING
+    // ============================================================
+
+    private void fetchYahooSparkPricesInParallel(
+            List<DividendData> dividendShares,
+            ExecutorService executor
+    ) {
+
+        if (dividendShares == null
+                || dividendShares.isEmpty()) {
+
+            return;
+        }
+
+
+        /*
+         * Only records that need Yahoo prices
+         * should be sent to Yahoo.
+         *
+         * This is important for MockData.
+         */
+        List<DividendData> sharesForYahoo =
+                new ArrayList<>();
+
+
+        for (DividendData share :
+                dividendShares) {
+
+            if (share == null) {
+
+                continue;
+            }
+
+
+            /*
+             * Mock data with an existing price
+             * does NOT need Yahoo.
+             */
+            if ("MOCK".equalsIgnoreCase(
+                    share.source
+            )
+                    && !isEmpty(
+                    share.currentSharePrice
+            )
+                    && !"N/A".equalsIgnoreCase(
+                    share.currentSharePrice
+            )) {
+
+                continue;
+            }
+
+
+            /*
+             * Normal NSE/Groww data goes to Yahoo.
+             *
+             * Mock data without a price is also allowed
+             * to remain without a price.
+             *
+             * Therefore, do NOT send mock records to Yahoo.
+             */
+            if ("MOCK".equalsIgnoreCase(
+                    share.source
+            )) {
+
+                continue;
+            }
+
+
+            sharesForYahoo.add(share);
+        }
+
+
+        if (sharesForYahoo.isEmpty()) {
+
+            return;
+        }
+
+
+        List<CompletableFuture<Void>> futures =
+                new ArrayList<>();
+
+
+        /*
+         * Split into batches of 20.
+         */
+        for (
+                int start = 0;
+                start < sharesForYahoo.size();
+                start += YAHOO_BATCH_SIZE
+        ) {
+
+            int end =
+                    Math.min(
+                            start + YAHOO_BATCH_SIZE,
+                            sharesForYahoo.size()
+                    );
+
+
+            List<DividendData> batch =
+                    new ArrayList<>(
+                            sharesForYahoo.subList(
+                                    start,
+                                    end
+                            )
+                    );
+
+
+            CompletableFuture<Void> future =
+                    CompletableFuture.runAsync(
+                            () -> fetchYahooBatch(batch),
+                            executor
+                    );
+
+
+            futures.add(future);
+        }
+
+
+        /*
+         * Wait for all Yahoo batches.
+         */
+        CompletableFuture.allOf(
+                futures.toArray(
+                        new CompletableFuture[0]
+                )
+        ).join();
+    }
+
+
+    // ============================================================
+    // YAHOO BATCH
+    // ============================================================
+
+    private void fetchYahooBatch(
+            List<DividendData> batch
+    ) {
+
+        if (batch == null
+                || batch.isEmpty()) {
+
+            return;
+        }
+
+
+        try {
+
+            StringBuilder symbolsBuilder =
+                    new StringBuilder();
+
+
+            for (DividendData share :
+                    batch) {
+
+                if (share == null
+                        || isEmpty(share.symbol)) {
+
+                    continue;
+                }
+
+
+                if (symbolsBuilder.length() > 0) {
+
+                    symbolsBuilder.append(",");
+                }
+
+
+                symbolsBuilder
+                        .append(
+                                normalizeSymbol(
+                                        share.symbol
+                                )
+                        )
+                        .append(".NS");
+            }
+
+
+            if (symbolsBuilder.length() == 0) {
+
+                return;
+            }
+
+
+            String yahooApiUrl =
+                    "https://query1.finance.yahoo.com/"
+                            + "v7/finance/spark"
+                            + "?symbols="
+                            + symbolsBuilder
+                            + "&range=1d"
+                            + "&interval=1d";
+
+
+            String response =
+                    fetchYahooResponse(
+                            yahooApiUrl
+                    );
+
+
+            Map<String, YahooPriceData> priceMap =
+                    extractYahooSparkPrices(
+                            response
+                    );
+
+
+            /*
+             * Map prices back to dividend records.
+             */
+            for (DividendData share :
+                    batch) {
+
+                if (share == null) {
+
+                    continue;
+                }
+
+
+                String yahooSymbol =
+                        normalizeSymbol(
+                                share.symbol
+                        ) + ".NS";
+
+
+                YahooPriceData yahooData =
+                        priceMap.get(
+                                yahooSymbol
+                        );
+
+
+                if (yahooData == null
+                        || isEmpty(
+                        yahooData.currentSharePrice
+                )
+                        || "N/A".equalsIgnoreCase(
+                        yahooData.currentSharePrice
+                )) {
+
+                    share.currentSharePrice =
+                            "N/A";
+
+                    share.chartPreviousClose =
+                            "N/A";
+
+                    continue;
+                }
+
+
+                share.currentSharePrice =
+                        yahooData.currentSharePrice;
+
+
+                share.chartPreviousClose =
+                        yahooData.chartPreviousClose;
+            }
+
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Yahoo batch failed: "
+                            + e.getMessage()
+            );
+
+
+            /*
+             * If the batch fails, all normal shares
+             * in this batch are removed later.
+             */
+            for (DividendData share :
+                    batch) {
+
+                if (share == null) {
+
+                    continue;
+                }
+
+
+                share.currentSharePrice =
+                        "N/A";
+
+
+                share.chartPreviousClose =
+                        "N/A";
+            }
+        }
+    }
+
+
+    // ============================================================
+    // PARSE YAHOO RESPONSE
+    // ============================================================
+
+    private Map<String, YahooPriceData>
+    extractYahooSparkPrices(
+            String response
+    ) {
+
+        Map<String, YahooPriceData> priceMap =
+                new LinkedHashMap<>();
+
+
+        if (isEmpty(response)) {
+
+            return priceMap;
+        }
+
+
+        try {
+
+            JsonObject root =
+                    JsonParser.parseString(
+                            response
+                    ).getAsJsonObject();
+
+
+            JsonObject spark =
+                    root.getAsJsonObject(
+                            "spark"
+                    );
+
+
+            if (spark == null) {
+
+                return priceMap;
+            }
+
+
+            JsonArray results =
+                    spark.getAsJsonArray(
+                            "result"
+                    );
+
+
+            if (results == null) {
+
+                return priceMap;
+            }
+
+
+            for (JsonElement element :
+                    results) {
+
+                try {
+
+                    if (element == null
+                            || !element.isJsonObject()) {
+
+                        continue;
+                    }
+
+
+                    JsonObject result =
+                            element.getAsJsonObject();
+
+
+                    String symbol =
+                            getStringValue(
+                                    result,
+                                    "symbol"
+                            );
+
+
+                    if (isEmpty(symbol)) {
+
+                        continue;
+                    }
+
+
+                    JsonArray responseArray =
+                            result.getAsJsonArray(
+                                    "response"
+                            );
+
+
+                    if (responseArray == null
+                            || responseArray.isEmpty()) {
+
+                        continue;
+                    }
+
+
+                    JsonObject firstResponse =
+                            responseArray
+                                    .get(0)
+                                    .getAsJsonObject();
+
+
+                    JsonObject meta =
+                            firstResponse.getAsJsonObject(
+                                    "meta"
+                            );
+
+
+                    if (meta == null) {
+
+                        continue;
+                    }
+
+
+                    YahooPriceData price =
+                            new YahooPriceData();
+
+
+                    price.currentSharePrice =
+                            getFormattedNumber(
+                                    meta,
+                                    "regularMarketPrice"
+                            );
+
+
+                    price.chartPreviousClose =
+                            getFormattedNumber(
+                                    meta,
+                                    "chartPreviousClose"
+                            );
+
+
+                    priceMap.put(
+                            symbol
+                                    .trim()
+                                    .toUpperCase(),
+                            price
+                    );
+
+
+                } catch (Exception e) {
+
+                    System.out.println(
+                            "Yahoo symbol parsing failed: "
+                                    + e.getMessage()
+                    );
+                }
+            }
+
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Yahoo parsing failed: "
+                            + e.getMessage()
+            );
+        }
+
+
+        return priceMap;
+    }
+
+
+    // ============================================================
+    // FORMAT YAHOO NUMBER
+    // ============================================================
+
+    private String getFormattedNumber(
             JsonObject jsonObject,
-            String key) {
+            String key
+    ) {
 
         if (jsonObject == null
                 || key == null
                 || !jsonObject.has(key)
                 || jsonObject.get(key).isJsonNull()) {
+
+            return "N/A";
+        }
+
+
+        try {
+
+            double value =
+                    jsonObject
+                            .get(key)
+                            .getAsDouble();
+
+
+            if (value <= 0
+                    || Double.isNaN(value)
+                    || Double.isInfinite(value)) {
+
+                return "N/A";
+            }
+
+
+            return formatPrice(value);
+
+
+        } catch (Exception e) {
+
+            return "N/A";
+        }
+    }
+
+
+    // ============================================================
+    // GROWW EX DATE
+    // ============================================================
+
+    private String getGrowwExDate(
+            JsonObject event
+    ) {
+
+        try {
+
+            JsonObject pillDto =
+                    event.getAsJsonObject(
+                            "corporateEventPillDto"
+                    );
+
+
+            if (pillDto == null) {
+
+                return null;
+            }
+
+
+            return getStringValue(
+                    pillDto,
+                    "primaryDate"
+            );
+
+
+        } catch (Exception e) {
+
+            return null;
+        }
+    }
+
+
+    // ============================================================
+    // GROWW DATE
+    // ============================================================
+
+    private LocalDate parseGrowwDate(
+            String date
+    ) {
+
+        if (isEmpty(date)) {
+
             return null;
         }
 
+
+        String value =
+                date.trim();
+
+
+        /*
+         * ISO:
+         *
+         * 2026-09-15
+         *
+         * 2026-09-15T00:00:00
+         */
+        if (value.length() >= 10
+                && value.charAt(4) == '-'
+                && value.charAt(7) == '-') {
+
+            try {
+
+                return LocalDate.parse(
+                        value.substring(0, 10)
+                );
+
+            } catch (Exception ignored) {
+            }
+        }
+
+
+        /*
+         * dd-MMM-yyyy
+         */
         try {
+
+            return LocalDate.parse(
+                    value,
+                    NSE_RESPONSE_DATE_FORMAT
+            );
+
+        } catch (Exception ignored) {
+        }
+
+
+        return null;
+    }
+
+
+    // ============================================================
+    // EXTRACT DIVIDEND AMOUNT
+    // ============================================================
+
+    private String extractDividendAmount(
+            String text
+    ) {
+
+        if (isEmpty(text)) {
+
+            return "N/A";
+        }
+
+
+        String normalizedText =
+                text
+                        .replace(
+                                '\u00A0',
+                                ' '
+                        )
+                        .trim();
+
+
+        Matcher matcher =
+                DIVIDEND_PATTERN.matcher(
+                        normalizedText
+                );
+
+
+        if (matcher.find()) {
+
+            return matcher.group(1);
+        }
+
+
+        Matcher rupeeMatcher =
+                RUPEE_PATTERN.matcher(
+                        normalizedText
+                );
+
+
+        if (rupeeMatcher.find()) {
+
+            return rupeeMatcher.group(1);
+        }
+
+
+        return "N/A";
+    }
+
+
+    // ============================================================
+    // FORMAT PRICE
+    // ============================================================
+
+    private String formatPrice(
+            double value
+    ) {
+
+        return new DecimalFormat(
+                "#,##0.00"
+        ).format(value);
+    }
+
+
+    // ============================================================
+    // GET STRING
+    // ============================================================
+
+    private String getStringValue(
+            JsonObject jsonObject,
+            String key
+    ) {
+
+        if (jsonObject == null
+                || key == null
+                || !jsonObject.has(key)
+                || jsonObject.get(key).isJsonNull()) {
+
+            return null;
+        }
+
+
+        try {
+
             String value =
-                    jsonObject.get(key).getAsString();
+                    jsonObject
+                            .get(key)
+                            .getAsString();
+
 
             return isEmpty(value)
                     ? null
                     : value.trim();
 
+
         } catch (Exception e) {
+
             return null;
         }
     }
 
-    private boolean isEmpty(String value) {
-        return value == null || value.trim().isEmpty();
+
+    // ============================================================
+    // STRING TO DOUBLE
+    // ============================================================
+
+    private Double parseDoubleOrNull(
+            String value
+    ) {
+
+        if (isEmpty(value)
+                || "N/A".equalsIgnoreCase(value)) {
+
+            return null;
+        }
+
+
+        try {
+
+            return Double.parseDouble(
+                    value
+                            .replace(",", "")
+                            .trim()
+            );
+
+        } catch (Exception e) {
+
+            return null;
+        }
     }
+
+
+    // ============================================================
+    // NORMALIZE SYMBOL
+    // ============================================================
+
+    private String normalizeSymbol(
+            String symbol
+    ) {
+
+        if (symbol == null) {
+
+            return "";
+        }
+
+
+        return symbol
+                .trim()
+                .toUpperCase();
+    }
+
+
+    // ============================================================
+    // EMPTY CHECK
+    // ============================================================
+
+    private boolean isEmpty(
+            String value
+    ) {
+
+        return value == null
+                || value.trim().isEmpty();
+    }
+
+
+    // ============================================================
+    // YAHOO PRICE DATA
+    // ============================================================
+
+    private static class YahooPriceData {
+
+        private String currentSharePrice;
+
+        private String chartPreviousClose;
+    }
+
+
+    // ============================================================
+    // DIVIDEND DATA
+    // ============================================================
 
     private static class DividendData {
 
         private String shareName;
+
         private String symbol;
+
         private String exDate;
-        private Double dividendAmount;
-        private Double currentSharePrice;
-        private double expectedDividendForSorting;
+
+        private String dividendDetails;
+
+        private String dividendAmount;
+
+        private String currentSharePrice;
+
+        private String chartPreviousClose;
+
+        private String source;
     }
 }
