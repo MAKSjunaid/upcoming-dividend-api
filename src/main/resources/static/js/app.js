@@ -1848,7 +1848,7 @@ function updateSortMessage() {
         } else {
 
             resultMessage.textContent =
-                "Sort by Dividend Yield: High to Low";
+                "Sort by Expected Dividend: High to Low";
         }
 
         return;
@@ -1871,7 +1871,7 @@ function updateSortMessage() {
         } else {
 
             resultMessage.textContent =
-                "Sort by Dividend Yield: Low to High";
+                "Sort by Expected Dividend: Low to High";
         }
 
         return;
@@ -1879,7 +1879,7 @@ function updateSortMessage() {
 
 
     resultMessage.textContent =
-        "Sort by Dividend Yield: High to Low";
+        "Sort by Expected Dividend: High to Low";
 }
 
 
@@ -3041,4 +3041,4 @@ async function refreshDividends() {
 searchDividends();
 
 
-// need to validate, looks perfect - ordering//
+// need to validate, looks perfect - ordering 27th 9:58 PM//
