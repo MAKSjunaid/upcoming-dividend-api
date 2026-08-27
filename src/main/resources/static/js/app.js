@@ -72,7 +72,7 @@ let dividendData = [];
 
 let currentInvestment = null;
 
-let currentSort = "expectedDesc";
+let currentSort = "dividendDesc";
 
 let loadingMessageTimer = null;
 
@@ -130,7 +130,6 @@ function startLoadingAnimation() {
     if (!loadingMessage) {
         return;
     }
-
 
     const messages = [
 
@@ -1032,12 +1031,17 @@ async function searchDividends() {
             investment;
 
 
+        /*
+         * Always reset to Dividend: High
+         * after a new search.
+         */
+
         currentSort =
-            "expectedDesc";
+            "dividendDesc";
 
 
         sortFilter.value =
-            "expectedDesc";
+            "dividendDesc";
 
 
         sortStocks();
@@ -1131,7 +1135,387 @@ function updateSummary(
 
 
 /* =========================================================
-   SORTING
+   INVESTMENT SHARES
+   ========================================================= */
+
+function getInvestmentShares(stock) {
+
+    /*
+     * No investment:
+     * We consider one share.
+     */
+
+    if (
+        currentInvestment === null ||
+        currentInvestment <= 0
+    ) {
+
+        return 1;
+    }
+
+
+    const price =
+        Number(
+            stock.current_share_price
+        );
+
+
+    if (
+        isNaN(price) ||
+        price <= 0
+    ) {
+
+        return 0;
+    }
+
+
+    return Math.floor(
+        currentInvestment /
+        price
+    );
+}
+
+
+/* =========================================================
+   DIVIDEND YIELD
+   ========================================================= */
+
+function getDividendYield(stock) {
+
+    const price =
+        Number(
+            stock.current_share_price
+        );
+
+
+    const dividend =
+        Number(
+            stock.dividend_amount
+        );
+
+
+    if (
+        isNaN(price) ||
+        price <= 0 ||
+        isNaN(dividend) ||
+        dividend < 0
+    ) {
+
+        return 0;
+    }
+
+
+    /*
+     * Dividend Yield:
+     *
+     * (Dividend / Current Price) × 100
+     */
+
+    return (
+        dividend /
+        price
+    ) * 100;
+}
+
+
+/* =========================================================
+   EXPECTED DIVIDEND
+   ========================================================= */
+
+function getExpectedDividend(stock) {
+
+    const dividend =
+        Number(
+            stock.dividend_amount
+        );
+
+
+    if (
+        isNaN(dividend) ||
+        dividend < 0
+    ) {
+
+        return 0;
+    }
+
+
+    /*
+     * No investment:
+     *
+     * Expected dividend for 1 share.
+     */
+
+    if (
+        currentInvestment === null ||
+        currentInvestment <= 0
+    ) {
+
+        return dividend;
+    }
+
+
+    const shares =
+        getInvestmentShares(stock);
+
+
+    /*
+     * User cannot buy even one share.
+     */
+
+    if (shares <= 0) {
+        return 0;
+    }
+
+
+    return (
+        shares *
+        dividend
+    );
+}
+
+
+/* =========================================================
+   DIVIDEND HIGH SORT
+   ========================================================= */
+
+function sortByDividendHigh(a, b) {
+
+    /*
+     * =====================================================
+     * NO INVESTMENT
+     * =====================================================
+     *
+     * Highest dividend yield first.
+     *
+     * Yield =
+     * (Dividend / Current Price) × 100
+     */
+
+    if (
+        currentInvestment === null ||
+        currentInvestment <= 0
+    ) {
+
+        const yieldA =
+            getDividendYield(a);
+
+        const yieldB =
+            getDividendYield(b);
+
+
+        if (
+            yieldB !== yieldA
+        ) {
+
+            return (
+                yieldB -
+                yieldA
+            );
+        }
+
+
+        /*
+         * If yield is equal,
+         * higher dividend/share first.
+         */
+
+        return (
+            Number(b.dividend_amount || 0) -
+            Number(a.dividend_amount || 0)
+        );
+    }
+
+
+    /*
+     * =====================================================
+     * INVESTMENT ENTERED
+     * =====================================================
+     *
+     * Highest achievable expected dividend first.
+     *
+     * Shares =
+     * floor(Investment / Current Price)
+     *
+     * Expected Dividend =
+     * Shares × Dividend
+     */
+
+
+    const sharesA =
+        getInvestmentShares(a);
+
+    const sharesB =
+        getInvestmentShares(b);
+
+
+    /*
+     * Stocks user cannot afford
+     * always go to the bottom.
+     */
+
+    if (
+        sharesA === 0 &&
+        sharesB > 0
+    ) {
+
+        return 1;
+    }
+
+
+    if (
+        sharesA > 0 &&
+        sharesB === 0
+    ) {
+
+        return -1;
+    }
+
+
+    const expectedA =
+        getExpectedDividend(a);
+
+    const expectedB =
+        getExpectedDividend(b);
+
+
+    /*
+     * Highest Expected Dividend first.
+     */
+
+    if (
+        expectedB !== expectedA
+    ) {
+
+        return (
+            expectedB -
+            expectedA
+        );
+    }
+
+
+    /*
+     * Tie breaker:
+     * Higher dividend yield first.
+     */
+
+    const yieldA =
+        getDividendYield(a);
+
+    const yieldB =
+        getDividendYield(b);
+
+
+    if (
+        yieldB !== yieldA
+    ) {
+
+        return (
+            yieldB -
+            yieldA
+        );
+    }
+
+
+    /*
+     * Final tie breaker:
+     * Higher dividend/share first.
+     */
+
+    return (
+        Number(b.dividend_amount || 0) -
+        Number(a.dividend_amount || 0)
+    );
+}
+
+
+/* =========================================================
+   DIVIDEND LOW SORT
+   ========================================================= */
+
+function sortByDividendLow(a, b) {
+
+    /*
+     * =====================================================
+     * INVESTMENT ENTERED
+     * =====================================================
+     *
+     * Lowest eligible Expected Dividend first.
+     *
+     * Zero-share stocks remain at the bottom.
+     */
+
+    if (
+        currentInvestment !== null &&
+        currentInvestment > 0
+    ) {
+
+        const sharesA =
+            getInvestmentShares(a);
+
+        const sharesB =
+            getInvestmentShares(b);
+
+
+        if (
+            sharesA === 0 &&
+            sharesB > 0
+        ) {
+
+            return 1;
+        }
+
+
+        if (
+            sharesA > 0 &&
+            sharesB === 0
+        ) {
+
+            return -1;
+        }
+
+
+        const expectedA =
+            getExpectedDividend(a);
+
+        const expectedB =
+            getExpectedDividend(b);
+
+
+        if (
+            expectedA !== expectedB
+        ) {
+
+            return (
+                expectedA -
+                expectedB
+            );
+        }
+
+
+        return (
+            getDividendYield(a) -
+            getDividendYield(b)
+        );
+    }
+
+
+    /*
+     * =====================================================
+     * NO INVESTMENT
+     * =====================================================
+     *
+     * Lowest dividend yield first.
+     */
+
+    return (
+        getDividendYield(a) -
+        getDividendYield(b)
+    );
+}
+
+
+/* =========================================================
+   SORT STOCKS
    ========================================================= */
 
 function sortStocks() {
@@ -1174,6 +1558,10 @@ function sortStocks() {
         sortedData.sort(
             function(a, b) {
 
+                /*
+                 * Date: Latest
+                 */
+
                 if (
                     currentSort ===
                     "dateAsc"
@@ -1186,33 +1574,46 @@ function sortStocks() {
                 }
 
 
+                /*
+                 * Dividend: High
+                 */
+
                 if (
                     currentSort ===
                     "dividendDesc"
                 ) {
 
-                    return (
-                        getExpectedDividend(b) -
-                        getExpectedDividend(a)
+                    return sortByDividendHigh(
+                        a,
+                        b
                     );
                 }
 
+
+                /*
+                 * Dividend: Low
+                 */
 
                 if (
                     currentSort ===
                     "dividendAsc"
                 ) {
 
-                    return (
-                        getExpectedDividend(a) -
-                        getExpectedDividend(b)
+                    return sortByDividendLow(
+                        a,
+                        b
                     );
                 }
 
 
-                return (
-                    getExpectedDividend(b) -
-                    getExpectedDividend(a)
+                /*
+                 * Default:
+                 * Dividend High
+                 */
+
+                return sortByDividendHigh(
+                    a,
+                    b
                 );
             }
         );
@@ -1226,60 +1627,6 @@ function sortStocks() {
 
 
     updateSortMessage();
-}
-
-
-function getExpectedDividend(stock) {
-
-    const price =
-        Number(
-            stock.current_share_price
-        );
-
-
-    const dividend =
-        Number(
-            stock.dividend_amount
-        );
-
-
-    if (
-        isNaN(dividend)
-    ) {
-
-        return 0;
-    }
-
-
-    if (
-        currentInvestment === null ||
-        currentInvestment <= 0
-    ) {
-
-        return dividend;
-    }
-
-
-    if (
-        isNaN(price) ||
-        price <= 0
-    ) {
-
-        return 0;
-    }
-
-
-    const shares =
-        Math.floor(
-            currentInvestment /
-            price
-        );
-
-
-    return (
-        shares *
-        dividend
-    );
 }
 
 
@@ -1485,8 +1832,24 @@ function updateSortMessage() {
         "dividendDesc"
     ) {
 
-        resultMessage.textContent =
-            "Sort by Dividend: High to Low";
+        /*
+         * The meaning changes depending
+         * on whether investment exists.
+         */
+
+        if (
+            currentInvestment !== null &&
+            currentInvestment > 0
+        ) {
+
+            resultMessage.textContent =
+                "Sort by Expected Dividend: High to Low";
+
+        } else {
+
+            resultMessage.textContent =
+                "Sort by Dividend Yield: High to Low";
+        }
 
         return;
     }
@@ -1497,15 +1860,121 @@ function updateSortMessage() {
         "dividendAsc"
     ) {
 
-        resultMessage.textContent =
-            "Sort by Dividend: Low to High";
+        if (
+            currentInvestment !== null &&
+            currentInvestment > 0
+        ) {
+
+            resultMessage.textContent =
+                "Sort by Expected Dividend: Low to High";
+
+        } else {
+
+            resultMessage.textContent =
+                "Sort by Dividend Yield: Low to High";
+        }
 
         return;
     }
 
 
     resultMessage.textContent =
-        "Sort by Dividend: High to Low";
+        "Sort by Dividend Yield: High to Low";
+}
+
+
+/* =========================================================
+   HIGHEST EXPECTED DIVIDEND
+   ========================================================= */
+
+function getHighestExpectedDividend(
+    data,
+    investment
+) {
+
+    if (
+        !Array.isArray(data) ||
+        data.length === 0 ||
+        investment === null ||
+        investment <= 0
+    ) {
+
+        return null;
+    }
+
+
+    let highestValue =
+        -1;
+
+
+    data.forEach(
+        function(stock) {
+
+            const price =
+                Number(
+                    stock.current_share_price
+                );
+
+
+            const dividend =
+                Number(
+                    stock.dividend_amount
+                );
+
+
+            if (
+                isNaN(price) ||
+                price <= 0 ||
+                isNaN(dividend) ||
+                dividend < 0
+            ) {
+
+                return;
+            }
+
+
+            const shares =
+                Math.floor(
+                    investment /
+                    price
+                );
+
+
+            /*
+             * Cannot afford even one share.
+             */
+
+            if (shares <= 0) {
+                return;
+            }
+
+
+            const expected =
+                shares *
+                dividend;
+
+
+            if (
+                expected >
+                highestValue
+            ) {
+
+                highestValue =
+                    expected;
+            }
+        }
+    );
+
+
+    if (
+        highestValue < 0
+    ) {
+
+        return null;
+    }
+
+
+    return highestValue;
 }
 
 
@@ -1735,21 +2204,12 @@ function toggleFavorite(
         favorites.has(key);
 
 
-    /* =====================================================
-       UNFAVORITE
-       ===================================================== */
-
     if (wasFavorite) {
 
         favorites.delete(key);
 
         saveFavorites();
 
-
-        /*
-         * IMPORTANT:
-         * Remove yellow immediately.
-         */
 
         button.classList.remove(
             "is-favorite"
@@ -1803,6 +2263,11 @@ function toggleFavorite(
         );
 
 
+        /*
+         * Immediately refresh the Favorites
+         * list after removing a favorite.
+         */
+
         if (
             currentSort ===
             "favorites"
@@ -1822,10 +2287,6 @@ function toggleFavorite(
         return;
     }
 
-
-    /* =====================================================
-       FAVORITE
-       ===================================================== */
 
     favorites.add(key);
 
@@ -1931,6 +2392,20 @@ function renderStocks(
     );
 
 
+    /*
+     * Find highest achievable expected dividend.
+     *
+     * Only stocks with at least one affordable share
+     * can become the highest expected dividend.
+     */
+
+    const highestExpectedDividend =
+        getHighestExpectedDividend(
+            data,
+            investment
+        );
+
+
     data.forEach(
         function(stock, index) {
 
@@ -1954,6 +2429,10 @@ function renderStocks(
                     ? 0
                     : dividend;
 
+
+            /*
+             * Investment entered.
+             */
 
             if (
                 investment !== null &&
@@ -1983,16 +2462,53 @@ function renderStocks(
                 );
 
 
+            /*
+             * Highest expected dividend.
+             *
+             * Only mark if this stock is actually
+             * eligible for at least one share.
+             */
+
+            const isHighestExpectedDividend =
+                highestExpectedDividend !== null &&
+                shares > 0 &&
+                expectedDividend ===
+                    highestExpectedDividend;
+
+
             const card =
                 document.createElement(
                     "div"
                 );
 
 
+            /*
+             * Tomorrow and highest-dividend
+             * highlights can work together.
+             */
+
+            let cardClass =
+                "stock-card";
+
+
+            if (tomorrow) {
+
+                cardClass +=
+                    " tomorrow-card";
+            }
+
+
+            if (
+                isHighestExpectedDividend
+            ) {
+
+                cardClass +=
+                    " highest-dividend-card";
+            }
+
+
             card.className =
-                tomorrow
-                    ? "stock-card tomorrow-card"
-                    : "stock-card";
+                cardClass;
 
 
             card.style.animationDelay =
@@ -2068,6 +2584,19 @@ function renderStocks(
                             <div class="tomorrow-badge">
 
                                 💵 Last Chance for Dividend
+
+                            </div>
+                          `
+                        : ""
+                }
+
+
+                ${
+                    isHighestExpectedDividend
+                        ? `
+                            <div class="highest-dividend-badge">
+
+                                🏆 Highest Expected Dividend
 
                             </div>
                           `
@@ -2510,3 +3039,6 @@ async function refreshDividends() {
    ========================================================= */
 
 searchDividends();
+
+
+// need to validate, looks perfect - ordering//
