@@ -10,3 +10,5 @@ public class DividendApplication {
         SpringApplication.run(DividendApplication.class, args);
     }
 }
+
+//perfect//
