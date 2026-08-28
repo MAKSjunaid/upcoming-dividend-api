@@ -95,7 +95,7 @@ public class DividendService {
      * Once the cache has been created, a background refresh
      * is allowed once every 5 minutes.
      */
-    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 5;
+    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 60;
 
     /*
      * If Yahoo cannot find a symbol, don't retry it on every
