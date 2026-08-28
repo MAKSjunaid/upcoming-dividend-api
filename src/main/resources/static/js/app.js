@@ -78,6 +78,40 @@ let loadingMessageTimer = null;
 
 
 /* =========================================================
+   AUTOMATIC REFRESH
+   ========================================================= */
+
+/*
+ * Automatically refresh dividend data every 1 minute.
+ *
+ * Important:
+ *
+ * This is a SILENT refresh.
+ *
+ * It does NOT:
+ *
+ * - reset sorting
+ * - reset favorites
+ * - reset investment
+ * - show loading animation
+ * - close search panel
+ * - scroll the page
+ * - change selected dates
+ *
+ * The latest API data is simply loaded and the
+ * existing UI state is reapplied.
+ */
+
+const AUTO_REFRESH_INTERVAL =
+    60 * 1000;
+
+
+let autoRefreshTimer = null;
+
+let autoRefreshing = false;
+
+
+/* =========================================================
    FAVORITES
    ========================================================= */
 
@@ -1033,7 +1067,9 @@ async function searchDividends() {
 
         /*
          * Always reset to Dividend: High
-         * after a new search.
+         * after a new manual search.
+         *
+         * This existing behavior is preserved.
          */
 
         currentSort =
@@ -1084,6 +1120,215 @@ async function searchDividends() {
             "Search";
     }
 }
+
+
+/* =========================================================
+   AUTOMATIC REFRESH FUNCTION
+   ========================================================= */
+
+/*
+ * Fetch the latest dividend data without changing
+ * the user's current UI state.
+ *
+ * This is intentionally separate from searchDividends()
+ * because searchDividends() is designed for a manual
+ * search and intentionally resets sorting.
+ */
+
+async function autoRefreshDividends() {
+
+    /*
+     * Do not start another automatic refresh
+     * while one is already running.
+     */
+
+    if (autoRefreshing) {
+        return;
+    }
+
+
+    /*
+     * Do not interfere with the existing manual
+     * search or pull-to-refresh operation.
+     */
+
+    if (
+        refreshing ||
+        (
+            searchButton &&
+            searchButton.disabled
+        )
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * There is nothing to refresh if the user
+     * has not completed the initial search yet.
+     */
+
+    if (
+        !fromDate.value ||
+        !toDate.value
+    ) {
+
+        return;
+    }
+
+
+    autoRefreshing = true;
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/dividends",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify(
+                            {
+                                from_date:
+                                    formatApiDate(
+                                        fromDate.value
+                                    ),
+
+                                to_date:
+                                    formatApiDate(
+                                        toDate.value
+                                    )
+                            }
+                        )
+                }
+            );
+
+
+        if (!response.ok) {
+
+            /*
+             * Silent failure.
+             *
+             * Automatic refresh should never
+             * disturb the existing UI if the API
+             * temporarily fails.
+             */
+
+            return;
+        }
+
+
+        const data =
+            await response.json();
+
+
+        if (!Array.isArray(data)) {
+
+            return;
+        }
+
+
+        /*
+         * Replace the old data with the newest
+         * API response.
+         */
+
+        dividendData =
+            data;
+
+
+        /*
+         * IMPORTANT:
+         *
+         * We intentionally DO NOT change:
+         *
+         * currentSort
+         * currentInvestment
+         * favorites
+         *
+         * sortFilter.value
+         *
+         * Therefore whatever the user is currently
+         * looking at remains selected.
+         */
+
+
+        /*
+         * Reapply the current sorting/filtering
+         * and investment calculations.
+         */
+
+        sortStocks();
+
+
+    } catch (e) {
+
+        /*
+         * Silent automatic refresh.
+         *
+         * Do not show an error popup/message because
+         * the user may currently be using the UI.
+         */
+
+        console.warn(
+            "Automatic dividend refresh failed:",
+            e
+        );
+
+    } finally {
+
+        autoRefreshing = false;
+    }
+}
+
+
+/* =========================================================
+   START AUTOMATIC REFRESH
+   ========================================================= */
+
+function startAutomaticRefresh() {
+
+    /*
+     * Prevent duplicate intervals.
+     */
+
+    if (autoRefreshTimer !== null) {
+
+        clearInterval(
+            autoRefreshTimer
+        );
+    }
+
+
+    /*
+     * Refresh every 60 seconds.
+     */
+
+    autoRefreshTimer =
+        setInterval(
+            autoRefreshDividends,
+            AUTO_REFRESH_INTERVAL
+        );
+}
+
+
+/*
+ * Start the automatic refresh timer once
+ * when this JavaScript file loads.
+ *
+ * The first automatic refresh will happen
+ * 60 seconds after page load.
+ */
+
+startAutomaticRefresh();
 
 
 /* =========================================================
@@ -3041,4 +3286,4 @@ async function refreshDividends() {
 searchDividends();
 
 
-// need to validate, looks perfect - ordering 27th 9:58 PM//
+// the above code refresh the page after 1 minute //
