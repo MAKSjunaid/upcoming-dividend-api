@@ -1,5 +1,7 @@
 package com.example.upcomingdividendapi;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -7,11 +9,20 @@ import com.google.gson.JsonParser;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,6 +32,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -32,12 +44,9 @@ public class DividendService {
     // ============================================================
 
     /*
-     * Yahoo supports multiple symbols in one Spark request.
-     */
-    private static final int YAHOO_BATCH_SIZE = 20;
-
-    /*
-     * Number of parallel API requests.
+     * Number of parallel Yahoo requests.
+     *
+     * Yahoo is called once per symbol.
      */
     private static final int THREAD_COUNT = 8;
 
@@ -51,6 +60,89 @@ public class DividendService {
      */
     private static final int READ_TIMEOUT = 15000;
 
+    /*
+     * Cache directory.
+     */
+    private static final String CACHE_DIRECTORY = "cache";
+
+    /*
+     * Cache file.
+     */
+    private static final String CACHE_FILE_NAME =
+            "dividend-cache.json";
+
+    /*
+     * Active price window.
+     *
+     * Only dividend shares whose ex-date is from tomorrow
+     * through the next 30 days are normally refreshed.
+     */
+    private static final int ACTIVE_PRICE_WINDOW_DAYS = 30;
+
+    /*
+     * Yahoo price refresh interval.
+     *
+     * A share will not be sent to Yahoo again if it was already
+     * checked less than 1 minute ago.
+     */
+    private static final int PRICE_REFRESH_INTERVAL_MINUTES = 1;
+
+    /*
+     * Dividend API refresh interval.
+     *
+     * NSE + Groww are not called on every request.
+     *
+     * Once the cache has been created, a background refresh
+     * is allowed once every 5 minutes.
+     */
+    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 5;
+
+    /*
+     * If Yahoo cannot find a symbol, don't retry it on every
+     * frontend request.
+     */
+    private static final int YAHOO_NOT_FOUND_RETRY_DAYS = 7;
+
+    /*
+     * Trading hours:
+     *
+     * 09:00 AM to 03:35 PM IST
+     *
+     * Monday to Friday.
+     */
+    private static final LocalTime TRADING_START_TIME =
+            LocalTime.of(9, 0);
+
+    private static final LocalTime TRADING_END_TIME =
+            LocalTime.of(15, 35);
+
+    /*
+     * India Standard Time.
+     */
+    private static final ZoneId INDIA_ZONE =
+            ZoneId.of("Asia/Kolkata");
+
+    /*
+     * Synchronizes cache file access.
+     */
+    private static final Object CACHE_LOCK =
+            new Object();
+
+    /*
+     * Prevents multiple background dividend refreshes from
+     * running at the same time.
+     */
+    private static final AtomicBoolean
+            BACKGROUND_REFRESH_RUNNING =
+            new AtomicBoolean(false);
+
+    /*
+     * Gson used for reading/writing cache JSON.
+     */
+    private static final Gson GSON =
+            new GsonBuilder()
+                    .setPrettyPrinting()
+                    .create();
 
     // ============================================================
     // DATE FORMATTERS
@@ -64,7 +156,6 @@ public class DividendService {
                     "dd-MMM-yyyy",
                     Locale.ENGLISH
             );
-
 
     // ============================================================
     // REGEX
@@ -80,7 +171,6 @@ public class DividendService {
             Pattern.compile(
                     "₹\\s*([0-9]+(?:\\.[0-9]+)?)"
             );
-
 
     // ============================================================
     // MAIN METHOD
@@ -104,7 +194,6 @@ public class DividendService {
                         ? request.getToDate()
                         : null;
 
-
         // ========================================================
         // 2. FROM DATE
         // ========================================================
@@ -114,7 +203,8 @@ public class DividendService {
         if (isEmpty(requestedFromDate)) {
 
             fromDateValue =
-                    LocalDate.now().plusDays(1);
+                    LocalDate.now(INDIA_ZONE)
+                            .plusDays(1);
 
         } else {
 
@@ -125,17 +215,21 @@ public class DividendService {
                     );
         }
 
-
         // ========================================================
         // 3. TO DATE
         // ========================================================
 
+        /*
+         * Default window is now exactly 30 days.
+         */
         LocalDate toDateValue;
 
         if (isEmpty(requestedToDate)) {
 
             toDateValue =
-                    fromDateValue.plusMonths(1);
+                    fromDateValue.plusDays(
+                            ACTIVE_PRICE_WINDOW_DAYS
+                    );
 
         } else {
 
@@ -145,7 +239,6 @@ public class DividendService {
                             "to_date"
                     );
         }
-
 
         // ========================================================
         // 4. VALIDATE DATE RANGE
@@ -158,10 +251,804 @@ public class DividendService {
             );
         }
 
+        // ========================================================
+        // 5. CURRENT IST DATE
+        // ========================================================
+
+        LocalDate today =
+                LocalDate.now(INDIA_ZONE);
 
         // ========================================================
-        // 5. FORMAT API DATES
+        // 6. CHECK TRADING TIME
         // ========================================================
+
+        boolean tradingHours =
+                isTradingHours();
+
+        System.out.println(
+                "================================================"
+        );
+
+        System.out.println(
+                "Dividend request received"
+        );
+
+        System.out.println(
+                "From date: " + fromDateValue
+        );
+
+        System.out.println(
+                "To date: " + toDateValue
+        );
+
+        System.out.println(
+                "IST time: "
+                        + LocalDateTime.now(INDIA_ZONE)
+        );
+
+        System.out.println(
+                "Trading hours: "
+                        + tradingHours
+        );
+
+        System.out.println(
+                "================================================"
+        );
+
+        // ========================================================
+        // 7. LOAD CACHE
+        // ========================================================
+
+        CacheFile cache =
+                loadCache();
+
+        boolean cacheChanged =
+                removeExpiredCacheRecords(
+                        cache,
+                        today
+                );
+
+        // ========================================================
+        // 8. DETERMINE CACHE COVERAGE
+        // ========================================================
+
+        boolean requestInsideNormalWindow =
+                isInsideActiveWindow(
+                        fromDateValue,
+                        toDateValue,
+                        today
+                );
+
+        // ========================================================
+        // 9. CACHE DOES NOT EXIST / REQUEST OUTSIDE CACHE WINDOW
+        // ========================================================
+
+        /*
+         * If there is no cache, we MUST fetch synchronously because
+         * we have nothing to return.
+         *
+         * If the user specifically requests a date range outside
+         * the normal 30-day window, we also fetch synchronously.
+         */
+        if (!requestInsideNormalWindow
+                || cache.dividends.isEmpty()) {
+
+            System.out.println(
+                    "Cache does not fully cover request."
+            );
+
+            System.out.println(
+                    "Fetching NSE + Groww dividend data..."
+            );
+
+            List<DividendData> freshDividendData =
+                    fetchDividendDataFromApis(
+                            fromDateValue,
+                            toDateValue
+                    );
+
+            if (!freshDividendData.isEmpty()) {
+
+                for (DividendData fresh :
+                        freshDividendData) {
+
+                    if (fresh == null
+                            || isEmpty(fresh.symbol)) {
+
+                        continue;
+                    }
+
+                    boolean changed =
+                            addOrUpdateDividendInCache(
+                                    cache,
+                                    fresh
+                            );
+
+                    if (changed) {
+
+                        cacheChanged = true;
+                    }
+                }
+            }
+        }
+
+        // ========================================================
+        // 10. MOCK DATA
+        // ========================================================
+
+        if (MockData.hasMockData()) {
+
+            List<DividendData> mockDividendShares =
+                    convertMockDataToDividendData();
+
+            for (DividendData mock :
+                    mockDividendShares) {
+
+                if (mock == null) {
+
+                    continue;
+                }
+
+                boolean changed =
+                        mergeSingleDividendIntoCache(
+                                cache,
+                                mock
+                        );
+
+                if (changed) {
+
+                    cacheChanged = true;
+                }
+            }
+        }
+
+        // ========================================================
+        // 11. SAVE CACHE AFTER SYNCHRONOUS DIVIDEND PROCESSING
+        // ========================================================
+
+        if (cacheChanged) {
+
+            saveCache(cache);
+        }
+
+        // ========================================================
+        // 12. START BACKGROUND DIVIDEND REFRESH
+        // ========================================================
+
+        /*
+         * IMPORTANT:
+         *
+         * We don't want every frontend request to wait for
+         * NSE + Groww.
+         *
+         * Existing cached data is returned immediately.
+         *
+         * If the dividend refresh interval has expired,
+         * a background task checks NSE + Groww.
+         *
+         * The next frontend refresh will receive the updated
+         * cache data.
+         */
+        startBackgroundDividendRefreshIfNeeded(
+                cache
+        );
+
+        // ========================================================
+        // 13. FIND RECORDS FOR REQUEST
+        // ========================================================
+
+        List<DividendData> requestedShares =
+                getSharesForRequestedDateRange(
+                        cache.dividends,
+                        fromDateValue,
+                        toDateValue
+                );
+
+        // ========================================================
+        // 14. PRICE UPDATE LOGIC
+        // ========================================================
+
+        boolean priceChanged = false;
+
+        // ========================================================
+        // NEWLY ADDED DATA IS HANDLED BY BACKGROUND REFRESH
+        // ========================================================
+
+        /*
+         * Existing cached data is intentionally reused here.
+         *
+         * Newly discovered dividends are handled by the
+         * background refresh method.
+         *
+         * This is important for non-trading hours:
+         *
+         * 5:00 PM
+         *     ↓
+         * NSE/Groww finds new dividend
+         *     ↓
+         * only that new symbol
+         *     ↓
+         * Yahoo price lookup
+         *     ↓
+         * cache updated
+         */
+
+        // ========================================================
+        // NORMAL ACTIVE-WINDOW PRICE REFRESH
+        // ========================================================
+
+        if (tradingHours) {
+
+            System.out.println(
+                    "Inside trading hours."
+            );
+
+            System.out.println(
+                    "Checking cached prices for active 30-day window..."
+            );
+
+            List<DividendData> sharesForPriceRefresh =
+                    getSharesForActivePriceRefresh(
+                            cache.dividends,
+                            today
+                    );
+
+            if (!sharesForPriceRefresh.isEmpty()) {
+
+                boolean changed =
+                        fetchYahooPricesInParallel(
+                                sharesForPriceRefresh
+                        );
+
+                if (changed) {
+
+                    priceChanged = true;
+                }
+            }
+
+        } else {
+
+            System.out.println(
+                    "Outside trading hours / weekend."
+            );
+
+            System.out.println(
+                    "Existing cached prices will be reused."
+            );
+
+            /*
+             * Only shares which do not have a cached price are
+             * allowed to call Yahoo outside trading hours.
+             *
+             * This normally means a newly discovered dividend.
+             */
+            List<DividendData> sharesWithoutPrice =
+                    getSharesWithoutPrice(
+                            requestedShares
+                    );
+
+            if (!sharesWithoutPrice.isEmpty()) {
+
+                System.out.println(
+                        "Found "
+                                + sharesWithoutPrice.size()
+                                + " share(s) without cached price."
+                );
+
+                boolean changed =
+                        fetchYahooPricesInParallel(
+                                sharesWithoutPrice
+                        );
+
+                if (changed) {
+
+                    priceChanged = true;
+                }
+            }
+        }
+
+        // ========================================================
+        // 15. SAVE UPDATED PRICE DATA
+        // ========================================================
+
+        if (priceChanged) {
+
+            saveCache(cache);
+        }
+
+        // ========================================================
+        // 16. READ REQUEST DATA AGAIN FROM CACHE
+        // ========================================================
+
+        requestedShares =
+                getSharesForRequestedDateRange(
+                        cache.dividends,
+                        fromDateValue,
+                        toDateValue
+                );
+
+        // ========================================================
+        // 17. REMOVE INVALID NORMAL RECORDS
+        // ========================================================
+
+        requestedShares.removeIf(
+                share -> {
+
+                    if (share == null) {
+
+                        return true;
+                    }
+
+                    if ("MOCK".equalsIgnoreCase(
+                            share.source
+                    )) {
+
+                        return false;
+                    }
+
+                    return isEmpty(
+                            share.currentSharePrice
+                    )
+                            || "N/A".equalsIgnoreCase(
+                            share.currentSharePrice
+                    );
+                }
+        );
+
+        // ========================================================
+        // 18. CREATE RESPONSE
+        // ========================================================
+
+        List<DividendResponse> response =
+                new ArrayList<>(
+                        requestedShares.size()
+                );
+
+        for (DividendData share :
+                requestedShares) {
+
+            if (share == null) {
+
+                continue;
+            }
+
+            Double dividendAmount =
+                    parseDoubleOrNull(
+                            share.dividendAmount
+                    );
+
+            Double currentPrice =
+                    parseDoubleOrNull(
+                            share.currentSharePrice
+                    );
+
+            Double previousPrice =
+                    parseDoubleOrNull(
+                            share.chartPreviousClose
+                    );
+
+            if (currentPrice == null
+                    && !"MOCK".equalsIgnoreCase(
+                    share.source
+            )) {
+
+                continue;
+            }
+
+            response.add(
+                    new DividendResponse(
+                            share.shareName,
+                            share.symbol,
+                            share.exDate,
+                            dividendAmount,
+                            currentPrice,
+                            previousPrice
+                    )
+            );
+        }
+
+        System.out.println(
+                "Returning "
+                        + response.size()
+                        + " dividend record(s) to frontend."
+        );
+
+        System.out.println(
+                "================================================"
+        );
+
+        return response;
+    }
+
+    // ============================================================
+    // BACKGROUND DIVIDEND REFRESH
+    // ============================================================
+
+    private void startBackgroundDividendRefreshIfNeeded(
+            CacheFile currentCache
+    ) {
+
+        if (currentCache == null) {
+
+            return;
+        }
+
+        if (!shouldRefreshDividendApis(
+                currentCache
+        )) {
+
+            return;
+        }
+
+        if (!BACKGROUND_REFRESH_RUNNING.compareAndSet(
+                false,
+                true
+        )) {
+
+            System.out.println(
+                    "Dividend background refresh is already running."
+            );
+
+            return;
+        }
+
+        /*
+         * Mark the attempt immediately.
+         *
+         * This prevents several incoming frontend requests
+         * from starting multiple refreshes.
+         */
+        synchronized (CACHE_LOCK) {
+
+            CacheFile latestCache =
+                    loadCache();
+
+            latestCache.lastDividendApiRefresh =
+                    LocalDateTime.now(
+                            INDIA_ZONE
+                    ).toString();
+
+            saveCache(
+                    latestCache
+            );
+        }
+
+        CompletableFuture.runAsync(
+                () -> {
+
+                    try {
+
+                        performBackgroundDividendRefresh();
+
+                    } catch (Exception e) {
+
+                        System.out.println(
+                                "Background dividend refresh failed: "
+                                        + e.getMessage()
+                        );
+
+                    } finally {
+
+                        BACKGROUND_REFRESH_RUNNING.set(
+                                false
+                        );
+                    }
+                }
+        );
+    }
+
+    // ============================================================
+    // CHECK DIVIDEND REFRESH TIME
+    // ============================================================
+
+    private boolean shouldRefreshDividendApis(
+            CacheFile cache
+    ) {
+
+        if (cache == null) {
+
+            return true;
+        }
+
+        if (isEmpty(
+                cache.lastDividendApiRefresh
+        )) {
+
+            return true;
+        }
+
+        try {
+
+            LocalDateTime lastRefresh =
+                    LocalDateTime.parse(
+                            cache.lastDividendApiRefresh
+                    );
+
+            LocalDateTime nextRefresh =
+                    lastRefresh.plusMinutes(
+                            DIVIDEND_REFRESH_INTERVAL_MINUTES
+                    );
+
+            return !LocalDateTime.now(
+                    INDIA_ZONE
+            ).isBefore(
+                    nextRefresh
+            );
+
+        } catch (Exception e) {
+
+            return true;
+        }
+    }
+
+    // ============================================================
+    // PERFORM BACKGROUND DIVIDEND REFRESH
+    // ============================================================
+
+    private void performBackgroundDividendRefresh() {
+
+        LocalDate today =
+                LocalDate.now(
+                        INDIA_ZONE
+                );
+
+        LocalDate refreshFromDate =
+                today.plusDays(1);
+
+        LocalDate refreshToDate =
+                refreshFromDate.plusDays(
+                        ACTIVE_PRICE_WINDOW_DAYS
+                );
+
+        System.out.println(
+                "------------------------------------------------"
+        );
+
+        System.out.println(
+                "Background dividend refresh started."
+        );
+
+        System.out.println(
+                "Refreshing dividend window: "
+                        + refreshFromDate
+                        + " -> "
+                        + refreshToDate
+        );
+
+        List<DividendData> freshDividendData =
+                fetchDividendDataFromApis(
+                        refreshFromDate,
+                        refreshToDate
+                );
+
+        if (freshDividendData == null
+                || freshDividendData.isEmpty()) {
+
+            System.out.println(
+                    "Background dividend refresh found no new data."
+            );
+
+            System.out.println(
+                    "------------------------------------------------"
+            );
+
+            return;
+        }
+
+        CacheFile cache =
+                loadCache();
+
+        boolean cacheChanged = false;
+
+        List<DividendData> newlyAddedDividends =
+                new ArrayList<>();
+
+        for (DividendData fresh :
+                freshDividendData) {
+
+            if (fresh == null
+                    || isEmpty(fresh.symbol)) {
+
+                continue;
+            }
+
+            boolean changed =
+                    addOrUpdateDividendInCache(
+                            cache,
+                            fresh
+                    );
+
+            if (changed) {
+
+                cacheChanged = true;
+
+                DividendData cached =
+                        findCachedDividend(
+                                cache,
+                                fresh
+                        );
+
+                if (cached != null) {
+
+                    /*
+                     * Only genuinely new dividend records are
+                     * added to this list.
+                     *
+                     * Existing records with changed dividend
+                     * details are NOT treated as new Yahoo
+                     * requests.
+                     */
+                    if (isNewDividendRecord(
+                            cached,
+                            fresh
+                    )) {
+
+                        newlyAddedDividends.add(
+                                cached
+                        );
+                    }
+                }
+            }
+        }
+
+        /*
+         * The method above may not be able to distinguish an
+         * updated existing record from a new record after merge.
+         *
+         * Therefore we perform an explicit check below using
+         * the cache state before/after would normally be needed.
+         *
+         * For safety, outside trading hours we only fetch Yahoo
+         * for records which do not already have a cached price.
+         */
+        if (cacheChanged) {
+
+            saveCache(cache);
+        }
+
+        // ========================================================
+        // NEW DIVIDEND PRICE LOOKUP
+        // ========================================================
+
+        if (!newlyAddedDividends.isEmpty()) {
+
+            System.out.println(
+                    "New dividend records discovered: "
+                            + newlyAddedDividends.size()
+            );
+
+            if (isTradingHours()) {
+
+                /*
+                 * During trading hours the normal price refresh
+                 * will handle active shares.
+                 */
+                System.out.println(
+                        "Trading hours active. Normal Yahoo refresh will handle prices."
+                );
+
+            } else {
+
+                /*
+                 * Outside trading hours:
+                 *
+                 * Only new shares without a cached price are
+                 * sent to Yahoo.
+                 */
+                List<DividendData> newSharesWithoutPrice =
+                        new ArrayList<>();
+
+                for (DividendData share :
+                        newlyAddedDividends) {
+
+                    if (share == null
+                            || isEmpty(
+                            share.symbol
+                    )) {
+
+                        continue;
+                    }
+
+                    if ("MOCK".equalsIgnoreCase(
+                            share.source
+                    )) {
+
+                        continue;
+                    }
+
+                    if (isEmpty(
+                            share.currentSharePrice
+                    )
+                            || "N/A".equalsIgnoreCase(
+                            share.currentSharePrice
+                    )) {
+
+                        newSharesWithoutPrice.add(
+                                share
+                        );
+                    }
+                }
+
+                if (!newSharesWithoutPrice.isEmpty()) {
+
+                    System.out.println(
+                            "Outside trading hours."
+                    );
+
+                    System.out.println(
+                            "Yahoo will be called only for newly discovered shares without price."
+                    );
+
+                    boolean priceChanged =
+                            fetchYahooPricesInParallel(
+                                    newSharesWithoutPrice
+                            );
+
+                    if (priceChanged) {
+
+                        saveCache(cache);
+                    }
+                }
+            }
+        }
+
+        System.out.println(
+                "Background dividend refresh completed."
+        );
+
+        System.out.println(
+                "------------------------------------------------"
+        );
+    }
+
+    // ============================================================
+    // CHECK NEW DIVIDEND RECORD
+    // ============================================================
+
+    private boolean isNewDividendRecord(
+            DividendData cached,
+            DividendData incoming
+    ) {
+
+        if (cached == null
+                || incoming == null) {
+
+            return false;
+        }
+
+        /*
+         * If the record already has a valid current price,
+         * it is not a new share requiring an initial Yahoo call.
+         */
+        if (!isEmpty(
+                cached.currentSharePrice
+        )
+                && !"N/A".equalsIgnoreCase(
+                cached.currentSharePrice
+        )) {
+
+            return false;
+        }
+
+        /*
+         * If the incoming dividend is currently being merged and
+         * the cached record has no price, it can be a new record.
+         */
+        return true;
+    }
+
+    // ============================================================
+    // FETCH DIVIDEND APIS
+    // ============================================================
+
+    private List<DividendData>
+    fetchDividendDataFromApis(
+            LocalDate fromDateValue,
+            LocalDate toDateValue
+    ) {
+
+        List<DividendData> result =
+                new ArrayList<>();
 
         String nseFromDate =
                 fromDateValue.format(
@@ -179,11 +1066,6 @@ public class DividendService {
         String growwToDate =
                 toDateValue.toString();
 
-
-        // ========================================================
-        // 6. CREATE API URLS
-        // ========================================================
-
         String nseApiUrl =
                 "https://www.nseindia.com/api/"
                         + "corporates-corporateActions"
@@ -192,7 +1074,6 @@ public class DividendService {
                         + "&to_date=" + nseToDate
                         + "&category=dividend";
 
-
         String growwApiUrl =
                 "https://groww.in/v1/api/"
                         + "stocks_data/equity_feature/v2/"
@@ -200,22 +1081,12 @@ public class DividendService {
                         + "?from=" + growwFromDate
                         + "&to=" + growwToDate;
 
-
-        // ========================================================
-        // 7. THREAD POOL
-        // ========================================================
-
         ExecutorService executor =
                 Executors.newFixedThreadPool(
                         THREAD_COUNT
                 );
 
-
         try {
-
-            // ====================================================
-            // 8. FETCH NSE + GROWW IN PARALLEL
-            // ====================================================
 
             CompletableFuture<String> nseFuture =
                     CompletableFuture.supplyAsync(
@@ -241,7 +1112,6 @@ public class DividendService {
                             executor
                     );
 
-
             CompletableFuture<String> growwFuture =
                     CompletableFuture.supplyAsync(
                             () -> {
@@ -266,27 +1136,16 @@ public class DividendService {
                             executor
                     );
 
-
-            // ====================================================
-            // 9. WAIT FOR BOTH
-            // ====================================================
-
             CompletableFuture.allOf(
                     nseFuture,
                     growwFuture
             ).join();
-
 
             String nseResponse =
                     nseFuture.join();
 
             String growwResponse =
                     growwFuture.join();
-
-
-            // ====================================================
-            // 10. PARSE NSE
-            // ====================================================
 
             List<DividendData> nseDividendShares =
                     nseResponse == null
@@ -297,11 +1156,6 @@ public class DividendService {
                             toDateValue
                     );
 
-
-            // ====================================================
-            // 11. PARSE GROWW
-            // ====================================================
-
             List<DividendData> growwDividendShares =
                     growwResponse == null
                             ? new ArrayList<>()
@@ -311,261 +1165,1030 @@ public class DividendService {
                             toDateValue
                     );
 
-
-            // ====================================================
-            // 12. MERGE NSE + GROWW
-            // ====================================================
-
-            List<DividendData> dividendShares =
+            result =
                     mergeAndRemoveDuplicates(
                             nseDividendShares,
                             growwDividendShares
                     );
 
-
-            // ====================================================
-            // 13. ADD MOCK DATA
-            // ====================================================
-            //
-            // IMPORTANT:
-            //
-            // MockData.hasMockData() is the FLAG.
-            //
-            // true:
-            //     MockData contains at least one field with data.
-            //
-            // false:
-            //     MockData contains no data.
-            //
-            // Mock data is added directly.
-            //
-            // It does NOT call:
-            //
-            //     NSE
-            //     Groww
-            //     Yahoo
-            //
-            // for its values.
-            // ====================================================
-
-            if (MockData.hasMockData()) {
-
-                List<DividendData> mockDividendShares =
-                        convertMockDataToDividendData();
-
-                dividendShares.addAll(
-                        mockDividendShares
-                );
-            }
-
-
-            // ====================================================
-            // 14. NO DATA
-            // ====================================================
-
-            if (dividendShares.isEmpty()) {
-
-                return new ArrayList<>();
-            }
-
-
-            // ====================================================
-            // 15. FETCH YAHOO PRICES
-            // ====================================================
-            //
-            // IMPORTANT:
-            //
-            // Only records WITHOUT an existing current price
-            // are sent to Yahoo.
-            //
-            // Mock records that already have a current price
-            // are NOT changed.
-            //
-            // Example:
-            //
-            // Mock:
-            // currentSharePrice = 450
-            //
-            // Yahoo is NOT called to replace 450.
-            //
-            // ====================================================
-
-            fetchYahooSparkPricesInParallel(
-                    dividendShares,
-                    executor
-            );
-
-
-            // ====================================================
-            // 16. REMOVE SHARES WITHOUT CURRENT PRICE
-            // ====================================================
-            //
-            // IMPORTANT:
-            //
-            // Normal NSE/Groww records without Yahoo price
-            // are removed.
-            //
-            // Mock records are NOT removed here just because
-            // their price is missing.
-            //
-            // This allows partial mock data.
-            // ====================================================
-
-            dividendShares.removeIf(
-                    share -> {
-
-                        if (share == null) {
-
-                            return true;
-                        }
-
-
-                        /*
-                         * Mock records are allowed to have
-                         * missing current price.
-                         */
-                        if ("MOCK".equalsIgnoreCase(
-                                share.source
-                        )) {
-
-                            return false;
-                        }
-
-
-                        /*
-                         * Existing NSE/Groww behavior.
-                         */
-                        return isEmpty(
-                                share.currentSharePrice
-                        )
-                                || "N/A".equalsIgnoreCase(
-                                share.currentSharePrice
-                        );
-                    }
-            );
-
-
-            // ====================================================
-            // 17. NO VALID DATA
-            // ====================================================
-
-            if (dividendShares.isEmpty()) {
-
-                return new ArrayList<>();
-            }
-
-
-            // ====================================================
-            // 18. CREATE RESPONSE
-            // ====================================================
-
-            List<DividendResponse> response =
-                    new ArrayList<>(
-                            dividendShares.size()
-                    );
-
-
-            for (DividendData share :
-                    dividendShares) {
-
-                if (share == null) {
-
-                    continue;
-                }
-
-
-                // ------------------------------------------------
-                // Convert values
-                // ------------------------------------------------
-
-                Double dividendAmount =
-                        parseDoubleOrNull(
-                                share.dividendAmount
-                        );
-
-
-                Double currentPrice =
-                        parseDoubleOrNull(
-                                share.currentSharePrice
-                        );
-
-
-                Double previousPrice =
-                        parseDoubleOrNull(
-                                share.chartPreviousClose
-                        );
-
-
-                // ------------------------------------------------
-                // Current price MUST exist for normal data.
-                //
-                // Mock data is allowed to have null price.
-                // ------------------------------------------------
-
-                if (currentPrice == null
-                        && !"MOCK".equalsIgnoreCase(
-                        share.source
-                )) {
-
-                    continue;
-                }
-
-
-                // ------------------------------------------------
-                // Add response
-                // ------------------------------------------------
-
-                response.add(
-                        new DividendResponse(
-                                share.shareName,
-                                share.symbol,
-                                share.exDate,
-                                dividendAmount,
-                                currentPrice,
-                                previousPrice
-                        )
-                );
-            }
-
-
-            return response;
-
-
         } finally {
 
             executor.shutdown();
         }
+
+        return result;
     }
 
+    // ============================================================
+    // CACHE
+    // ============================================================
+
+    private CacheFile loadCache() {
+
+        synchronized (CACHE_LOCK) {
+
+            File cacheFile =
+                    getCacheFile();
+
+            if (!cacheFile.exists()) {
+
+                System.out.println(
+                        "Cache file does not exist."
+                );
+
+                System.out.println(
+                        "A new cache will be created."
+                );
+
+                return new CacheFile();
+            }
+
+            try (
+                    FileReader reader =
+                            new FileReader(cacheFile)
+            ) {
+
+                CacheFile cache =
+                        GSON.fromJson(
+                                reader,
+                                CacheFile.class
+                        );
+
+                if (cache == null) {
+
+                    return new CacheFile();
+                }
+
+                if (cache.dividends == null) {
+
+                    cache.dividends =
+                            new ArrayList<>();
+                }
+
+                return cache;
+
+            } catch (Exception e) {
+
+                System.out.println(
+                        "Cache file could not be read: "
+                                + e.getMessage()
+                );
+
+                return new CacheFile();
+            }
+        }
+    }
+
+    // ============================================================
+    // SAVE CACHE
+    // ============================================================
+
+    private void saveCache(
+            CacheFile cache
+    ) {
+
+        synchronized (CACHE_LOCK) {
+
+            try {
+
+                File directory =
+                        new File(
+                                CACHE_DIRECTORY
+                        );
+
+                if (!directory.exists()) {
+
+                    boolean created =
+                            directory.mkdirs();
+
+                    if (!created
+                            && !directory.exists()) {
+
+                        System.out.println(
+                                "Could not create cache directory."
+                        );
+
+                        return;
+                    }
+                }
+
+                cache.lastUpdated =
+                        LocalDateTime.now(
+                                INDIA_ZONE
+                        ).toString();
+
+                File cacheFile =
+                        getCacheFile();
+
+                File temporaryFile =
+                        new File(
+                                CACHE_DIRECTORY,
+                                CACHE_FILE_NAME
+                                        + ".tmp"
+                        );
+
+                try (
+                        FileWriter writer =
+                                new FileWriter(
+                                        temporaryFile
+                                )
+                ) {
+
+                    GSON.toJson(
+                            cache,
+                            writer
+                    );
+                }
+
+                if (cacheFile.exists()) {
+
+                    if (!cacheFile.delete()) {
+
+                        System.out.println(
+                                "Could not delete old cache file."
+                        );
+
+                        return;
+                    }
+                }
+
+                if (!temporaryFile.renameTo(
+                        cacheFile
+                )) {
+
+                    System.out.println(
+                            "Could not rename temporary cache file."
+                    );
+
+                    return;
+                }
+
+                System.out.println(
+                        "Cache saved successfully."
+                );
+
+            } catch (Exception e) {
+
+                System.out.println(
+                        "Cache save failed: "
+                                + e.getMessage()
+                );
+            }
+        }
+    }
+
+    // ============================================================
+    // CACHE FILE PATH
+    // ============================================================
+
+    private File getCacheFile() {
+
+        return new File(
+                CACHE_DIRECTORY,
+                CACHE_FILE_NAME
+        );
+    }
+
+    // ============================================================
+    // REMOVE EXPIRED DATA
+    // ============================================================
+
+    private boolean removeExpiredCacheRecords(
+            CacheFile cache,
+            LocalDate today
+    ) {
+
+        if (cache == null
+                || cache.dividends == null
+                || cache.dividends.isEmpty()) {
+
+            return false;
+        }
+
+        int oldSize =
+                cache.dividends.size();
+
+        cache.dividends.removeIf(
+                share -> {
+
+                    if (share == null
+                            || isEmpty(share.exDate)) {
+
+                        return true;
+                    }
+
+                    LocalDate exDate =
+                            parseCachedExDate(
+                                    share.exDate
+                            );
+
+                    if (exDate == null) {
+
+                        return false;
+                    }
+
+                    return exDate.isBefore(today);
+                }
+        );
+
+        int newSize =
+                cache.dividends.size();
+
+        if (oldSize != newSize) {
+
+            System.out.println(
+                    "Removed "
+                            + (oldSize - newSize)
+                            + " expired dividend record(s) from cache."
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    // ============================================================
+    // CHECK ACTIVE 30-DAY WINDOW
+    // ============================================================
+
+    private boolean isInsideActiveWindow(
+            LocalDate fromDate,
+            LocalDate toDate,
+            LocalDate today
+    ) {
+
+        LocalDate activeStart =
+                today.plusDays(1);
+
+        LocalDate activeEnd =
+                today.plusDays(
+                        ACTIVE_PRICE_WINDOW_DAYS
+                );
+
+        return !fromDate.isBefore(activeStart)
+                && !toDate.isAfter(activeEnd);
+    }
+
+    // ============================================================
+    // GET REQUESTED CACHE DATA
+    // ============================================================
+
+    private List<DividendData>
+    getSharesForRequestedDateRange(
+            List<DividendData> allShares,
+            LocalDate fromDate,
+            LocalDate toDate
+    ) {
+
+        List<DividendData> result =
+                new ArrayList<>();
+
+        if (allShares == null
+                || allShares.isEmpty()) {
+
+            return result;
+        }
+
+        for (DividendData share :
+                allShares) {
+
+            if (share == null
+                    || isEmpty(share.exDate)) {
+
+                continue;
+            }
+
+            LocalDate exDate =
+                    parseCachedExDate(
+                            share.exDate
+                    );
+
+            if (exDate == null) {
+
+                continue;
+            }
+
+            if (exDate.isBefore(fromDate)
+                    || exDate.isAfter(toDate)) {
+
+                continue;
+            }
+
+            result.add(share);
+        }
+
+        return result;
+    }
+
+    // ============================================================
+    // ACTIVE PRICE REFRESH
+    // ============================================================
+
+    private List<DividendData>
+    getSharesForActivePriceRefresh(
+            List<DividendData> allShares,
+            LocalDate today
+    ) {
+
+        List<DividendData> result =
+                new ArrayList<>();
+
+        if (allShares == null
+                || allShares.isEmpty()) {
+
+            return result;
+        }
+
+        LocalDate activeStart =
+                today.plusDays(1);
+
+        LocalDate activeEnd =
+                today.plusDays(
+                        ACTIVE_PRICE_WINDOW_DAYS
+                );
+
+        for (DividendData share :
+                allShares) {
+
+            if (share == null
+                    || isEmpty(share.exDate)
+                    || isEmpty(share.symbol)) {
+
+                continue;
+            }
+
+            LocalDate exDate =
+                    parseCachedExDate(
+                            share.exDate
+                    );
+
+            if (exDate == null) {
+
+                continue;
+            }
+
+            if (exDate.isBefore(activeStart)
+                    || exDate.isAfter(activeEnd)) {
+
+                continue;
+            }
+
+            if ("MOCK".equalsIgnoreCase(
+                    share.source
+            )
+                    && !isEmpty(
+                    share.currentSharePrice
+            )
+                    && !"N/A".equalsIgnoreCase(
+                    share.currentSharePrice
+            )) {
+
+                continue;
+            }
+
+            if (!shouldAttemptYahoo(
+                    share
+            )) {
+
+                continue;
+            }
+
+            result.add(share);
+        }
+
+        return result;
+    }
+
+    // ============================================================
+    // SHARES WITHOUT PRICE
+    // ============================================================
+
+    private List<DividendData>
+    getSharesWithoutPrice(
+            List<DividendData> requestedShares
+    ) {
+
+        List<DividendData> result =
+                new ArrayList<>();
+
+        if (requestedShares == null
+                || requestedShares.isEmpty()) {
+
+            return result;
+        }
+
+        for (DividendData share :
+                requestedShares) {
+
+            if (share == null) {
+
+                continue;
+            }
+
+            if ("MOCK".equalsIgnoreCase(
+                    share.source
+            )) {
+
+                continue;
+            }
+
+            if (!isEmpty(
+                    share.currentSharePrice
+            )
+                    && !"N/A".equalsIgnoreCase(
+                    share.currentSharePrice
+            )) {
+
+                continue;
+            }
+
+            if (!shouldAttemptYahoo(
+                    share
+            )) {
+
+                continue;
+            }
+
+            result.add(share);
+        }
+
+        return result;
+    }
+
+    // ============================================================
+    // BACKWARD COMPATIBILITY
+    // ============================================================
+
+    private List<DividendData>
+    getNewSharesWithoutPrice(
+            List<DividendData> requestedShares
+    ) {
+
+        return getSharesWithoutPrice(
+                requestedShares
+        );
+    }
+
+    // ============================================================
+    // CHECK WHETHER YAHOO SHOULD BE CALLED
+    // ============================================================
+
+    private boolean shouldAttemptYahoo(
+            DividendData share
+    ) {
+
+        if (share == null
+                || isEmpty(share.symbol)) {
+
+            return false;
+        }
+
+        if ("MOCK".equalsIgnoreCase(
+                share.source
+        )) {
+
+            return false;
+        }
+
+        if ("NOT_FOUND".equalsIgnoreCase(
+                share.yahooStatus
+        )) {
+
+            if (isEmpty(
+                    share.lastYahooAttempt
+            )) {
+
+                return true;
+            }
+
+            try {
+
+                LocalDateTime lastAttempt =
+                        LocalDateTime.parse(
+                                share.lastYahooAttempt
+                        );
+
+                LocalDateTime retryAfter =
+                        lastAttempt.plusDays(
+                                YAHOO_NOT_FOUND_RETRY_DAYS
+                        );
+
+                boolean retry =
+                        !LocalDateTime.now(
+                                INDIA_ZONE
+                        ).isBefore(
+                                retryAfter
+                        );
+
+                if (!retry) {
+
+                    System.out.println(
+                            "Skipping Yahoo for "
+                                    + share.symbol
+                                    + " - previously NOT_FOUND."
+                    );
+                }
+
+                return retry;
+
+            } catch (Exception e) {
+
+                return true;
+            }
+        }
+
+        /*
+         * ========================================================
+         * IMPORTANT 1-MINUTE PRICE CACHE
+         * ========================================================
+         *
+         * If Yahoo was contacted less than one minute ago,
+         * don't call Yahoo again.
+         */
+        if (!isEmpty(
+                share.lastYahooAttempt
+        )) {
+
+            try {
+
+                LocalDateTime lastAttempt =
+                        LocalDateTime.parse(
+                                share.lastYahooAttempt
+                        );
+
+                LocalDateTime nextAllowedAttempt =
+                        lastAttempt.plusMinutes(
+                                PRICE_REFRESH_INTERVAL_MINUTES
+                        );
+
+                boolean allowed =
+                        !LocalDateTime.now(
+                                INDIA_ZONE
+                        ).isBefore(
+                                nextAllowedAttempt
+                        );
+
+                if (!allowed) {
+
+                    System.out.println(
+                            "Skipping Yahoo for "
+                                    + share.symbol
+                                    + " - refreshed less than "
+                                    + PRICE_REFRESH_INTERVAL_MINUTES
+                                    + " minute ago."
+                    );
+                }
+
+                return allowed;
+
+            } catch (Exception e) {
+
+                /*
+                 * If timestamp is invalid, allow a fresh lookup.
+                 */
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    // ============================================================
+    // MERGE FRESH DATA INTO CACHE
+    // ============================================================
+
+    private boolean mergeFreshDataIntoCache(
+            CacheFile cache,
+            List<DividendData> freshData
+    ) {
+
+        boolean changed = false;
+
+        if (cache == null) {
+
+            return false;
+        }
+
+        if (cache.dividends == null) {
+
+            cache.dividends =
+                    new ArrayList<>();
+        }
+
+        if (freshData == null) {
+
+            return false;
+        }
+
+        for (DividendData fresh :
+                freshData) {
+
+            if (fresh == null
+                    || isEmpty(fresh.symbol)) {
+
+                continue;
+            }
+
+            boolean merged =
+                    mergeSingleDividendIntoCache(
+                            cache,
+                            fresh
+                    );
+
+            if (merged) {
+
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    // ============================================================
+    // ADD OR UPDATE DIVIDEND
+    // ============================================================
+
+    private boolean addOrUpdateDividendInCache(
+            CacheFile cache,
+            DividendData incoming
+    ) {
+
+        if (cache == null
+                || incoming == null
+                || isEmpty(incoming.symbol)) {
+
+            return false;
+        }
+
+        if (cache.dividends == null) {
+
+            cache.dividends =
+                    new ArrayList<>();
+        }
+
+        String incomingKey =
+                createCacheKey(
+                        incoming
+                );
+
+        for (DividendData existing :
+                cache.dividends) {
+
+            if (existing == null) {
+
+                continue;
+            }
+
+            String existingKey =
+                    createCacheKey(
+                            existing
+                    );
+
+            if (incomingKey.equals(
+                    existingKey
+            )) {
+
+                /*
+                 * IMPORTANT:
+                 *
+                 * The old code ignored the return value here.
+                 *
+                 * If NSE/Groww updates dividend details, the cache
+                 * must know that it changed.
+                 */
+                return mergeExistingDividendFields(
+                        existing,
+                        incoming
+                );
+            }
+        }
+
+        cache.dividends.add(
+                incoming
+        );
+
+        System.out.println(
+                "New dividend added to cache: "
+                        + incoming.symbol
+                        + " / "
+                        + incoming.exDate
+        );
+
+        return true;
+    }
+
+    // ============================================================
+    // MERGE ONE DIVIDEND
+    // ============================================================
+
+    private boolean mergeSingleDividendIntoCache(
+            CacheFile cache,
+            DividendData incoming
+    ) {
+
+        if (cache == null
+                || incoming == null
+                || isEmpty(incoming.symbol)) {
+
+            return false;
+        }
+
+        if (cache.dividends == null) {
+
+            cache.dividends =
+                    new ArrayList<>();
+        }
+
+        String incomingKey =
+                createCacheKey(
+                        incoming
+                );
+
+        for (DividendData existing :
+                cache.dividends) {
+
+            if (existing == null) {
+
+                continue;
+            }
+
+            String existingKey =
+                    createCacheKey(
+                            existing
+                    );
+
+            if (incomingKey.equals(
+                    existingKey
+            )) {
+
+                return mergeExistingDividendFields(
+                        existing,
+                        incoming
+                );
+            }
+        }
+
+        cache.dividends.add(
+                incoming
+        );
+
+        System.out.println(
+                "New dividend added to cache: "
+                        + incoming.symbol
+                        + " / "
+                        + incoming.exDate
+        );
+
+        return true;
+    }
+
+    // ============================================================
+    // MERGE EXISTING DIVIDEND FIELDS
+    // ============================================================
+
+    private boolean mergeExistingDividendFields(
+            DividendData existing,
+            DividendData incoming
+    ) {
+
+        if (existing == null
+                || incoming == null) {
+
+            return false;
+        }
+
+        boolean changed = false;
+
+        if (!isEmpty(
+                incoming.shareName
+        )
+                && !safeEquals(
+                existing.shareName,
+                incoming.shareName
+        )) {
+
+            existing.shareName =
+                    incoming.shareName;
+
+            changed = true;
+        }
+
+        if (!isEmpty(
+                incoming.dividendDetails
+        )
+                && !safeEquals(
+                existing.dividendDetails,
+                incoming.dividendDetails
+        )) {
+
+            existing.dividendDetails =
+                    incoming.dividendDetails;
+
+            changed = true;
+        }
+
+        if (!isEmpty(
+                incoming.dividendAmount
+        )
+                && !safeEquals(
+                existing.dividendAmount,
+                incoming.dividendAmount
+        )) {
+
+            existing.dividendAmount =
+                    incoming.dividendAmount;
+
+            changed = true;
+        }
+
+        if ("MOCK".equalsIgnoreCase(
+                incoming.source
+        )
+                && !isEmpty(
+                incoming.currentSharePrice
+        )
+                && !safeEquals(
+                existing.currentSharePrice,
+                incoming.currentSharePrice
+        )) {
+
+            existing.currentSharePrice =
+                    incoming.currentSharePrice;
+
+            changed = true;
+        }
+
+        if ("MOCK".equalsIgnoreCase(
+                incoming.source
+        )
+                && !isEmpty(
+                incoming.chartPreviousClose
+        )
+                && !safeEquals(
+                existing.chartPreviousClose,
+                incoming.chartPreviousClose
+        )) {
+
+            existing.chartPreviousClose =
+                    incoming.chartPreviousClose;
+
+            changed = true;
+        }
+
+        if (isEmpty(existing.source)
+                && !isEmpty(incoming.source)) {
+
+            existing.source =
+                    incoming.source;
+
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    // ============================================================
+    // FIND CACHED DIVIDEND
+    // ============================================================
+
+    private DividendData findCachedDividend(
+            CacheFile cache,
+            DividendData incoming
+    ) {
+
+        if (cache == null
+                || incoming == null
+                || cache.dividends == null) {
+
+            return null;
+        }
+
+        String key =
+                createCacheKey(
+                        incoming
+                );
+
+        for (DividendData share :
+                cache.dividends) {
+
+            if (share == null) {
+
+                continue;
+            }
+
+            if (key.equals(
+                    createCacheKey(
+                            share
+                    )
+            )) {
+
+                return share;
+            }
+        }
+
+        return null;
+    }
+
+    // ============================================================
+    // CACHE KEY
+    // ============================================================
+
+    private String createCacheKey(
+            DividendData data
+    ) {
+
+        if (data == null) {
+
+            return "";
+        }
+
+        String symbol =
+                normalizeSymbol(
+                        data.symbol
+                );
+
+        String exDate =
+                data.exDate == null
+                        ? ""
+                        : data.exDate.trim();
+
+        return symbol
+                + "|"
+                + exDate;
+    }
+
+    // ============================================================
+    // CACHE EX DATE PARSER
+    // ============================================================
+
+    private LocalDate parseCachedExDate(
+            String date
+    ) {
+
+        if (isEmpty(date)) {
+
+            return null;
+        }
+
+        String value =
+                date.trim();
+
+        try {
+
+            if (value.length() >= 10
+                    && value.charAt(4) == '-'
+                    && value.charAt(7) == '-') {
+
+                return LocalDate.parse(
+                        value.substring(0, 10)
+                );
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        try {
+
+            return LocalDate.parse(
+                    value,
+                    NSE_RESPONSE_DATE_FORMAT
+            );
+
+        } catch (Exception ignored) {
+        }
+
+        try {
+
+            return LocalDate.parse(
+                    value,
+                    API_DATE_FORMAT
+            );
+
+        } catch (Exception ignored) {
+        }
+
+        return null;
+    }
 
     // ============================================================
     // CONVERT MOCK DATA
     // ============================================================
 
-    /*
-     * Converts MockData.MockDividend into the same internal
-     * DividendData structure used by NSE and Groww.
-     *
-     * This means the frontend does not need to know whether
-     * the record came from NSE, Groww or MockData.
-     */
     private List<DividendData>
     convertMockDataToDividendData() {
 
         List<DividendData> result =
                 new ArrayList<>();
 
-
         List<MockData.MockDividend> mockDividends =
                 MockData.getMockDividends();
-
 
         if (mockDividends == null
                 || mockDividends.isEmpty()) {
 
             return result;
         }
-
 
         for (MockData.MockDividend mock :
                 mockDividends) {
@@ -575,20 +2198,13 @@ public class DividendService {
                 continue;
             }
 
-
-            /*
-             * If the individual mock record is completely empty,
-             * do not send it to the frontend.
-             */
             if (!hasAnyMockData(mock)) {
 
                 continue;
             }
 
-
             DividendData data =
                     new DividendData();
-
 
             data.shareName =
                     mock.getShareName();
@@ -619,17 +2235,14 @@ public class DividendService {
             data.source =
                     "MOCK";
 
-
             result.add(data);
         }
-
 
         return result;
     }
 
-
     // ============================================================
-    // CHECK ONE MOCK RECORD
+    // CHECK MOCK DATA
     // ============================================================
 
     private boolean hasAnyMockData(
@@ -641,7 +2254,6 @@ public class DividendService {
             return false;
         }
 
-
         return !isEmpty(mock.getShareName())
                 || !isEmpty(mock.getSymbol())
                 || !isEmpty(mock.getExDate())
@@ -649,7 +2261,6 @@ public class DividendService {
                 || mock.getCurrentSharePrice() != null
                 || mock.getPreviousSharePrice() != null;
     }
-
 
     // ============================================================
     // FORMAT MOCK NUMBER
@@ -664,17 +2275,14 @@ public class DividendService {
             return null;
         }
 
-
         if (Double.isNaN(value)
                 || Double.isInfinite(value)) {
 
             return null;
         }
 
-
         return formatPrice(value);
     }
-
 
     // ============================================================
     // PARSE DATE
@@ -702,6 +2310,36 @@ public class DividendService {
         }
     }
 
+    // ============================================================
+    // TRADING HOURS
+    // ============================================================
+
+    private boolean isTradingHours() {
+
+        LocalDateTime now =
+                LocalDateTime.now(
+                        INDIA_ZONE
+                );
+
+        DayOfWeek day =
+                now.getDayOfWeek();
+
+        if (day == DayOfWeek.SATURDAY
+                || day == DayOfWeek.SUNDAY) {
+
+            return false;
+        }
+
+        LocalTime time =
+                now.toLocalTime();
+
+        return !time.isBefore(
+                TRADING_START_TIME
+        )
+                && !time.isAfter(
+                TRADING_END_TIME
+        );
+    }
 
     // ============================================================
     // NSE REQUEST
@@ -717,7 +2355,6 @@ public class DividendService {
         );
     }
 
-
     // ============================================================
     // GROWW REQUEST
     // ============================================================
@@ -732,7 +2369,6 @@ public class DividendService {
         );
     }
 
-
     // ============================================================
     // YAHOO REQUEST
     // ============================================================
@@ -743,10 +2379,9 @@ public class DividendService {
 
         return fetchResponse(
                 apiUrl,
-                null
+                "https://finance.yahoo.com/"
         );
     }
-
 
     // ============================================================
     // COMMON HTTP REQUEST
@@ -762,8 +2397,9 @@ public class DividendService {
                         new URL(apiUrl)
                                 .openConnection();
 
-
-        connection.setRequestMethod("GET");
+        connection.setRequestMethod(
+                "GET"
+        );
 
         connection.setConnectTimeout(
                 CONNECT_TIMEOUT
@@ -773,11 +2409,16 @@ public class DividendService {
                 READ_TIMEOUT
         );
 
-        connection.setUseCaches(false);
+        connection.setUseCaches(
+                false
+        );
 
         connection.setRequestProperty(
                 "User-Agent",
-                "Mozilla/5.0"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        + "AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) "
+                        + "Chrome/139.0.0.0 Safari/537.36"
         );
 
         connection.setRequestProperty(
@@ -790,7 +2431,6 @@ public class DividendService {
                 "en-US,en;q=0.9"
         );
 
-
         if (referer != null) {
 
             connection.setRequestProperty(
@@ -799,12 +2439,10 @@ public class DividendService {
             );
         }
 
-
         try {
 
             int responseCode =
                     connection.getResponseCode();
-
 
             if (responseCode
                     != HttpURLConnection.HTTP_OK) {
@@ -815,16 +2453,15 @@ public class DividendService {
                 );
             }
 
-
             StringBuilder response =
                     new StringBuilder();
-
 
             try (
                     BufferedReader reader =
                             new BufferedReader(
                                     new InputStreamReader(
-                                            connection.getInputStream()
+                                            connection.getInputStream(),
+                                            StandardCharsets.UTF_8
                                     )
                             )
             ) {
@@ -840,16 +2477,13 @@ public class DividendService {
                 }
             }
 
-
             return response.toString();
-
 
         } finally {
 
             connection.disconnect();
         }
     }
-
 
     // ============================================================
     // NSE PARSER
@@ -865,12 +2499,10 @@ public class DividendService {
         List<DividendData> dividendShares =
                 new ArrayList<>();
 
-
         if (isEmpty(response)) {
 
             return dividendShares;
         }
-
 
         try {
 
@@ -879,16 +2511,13 @@ public class DividendService {
                             response
                     );
 
-
             if (!root.isJsonArray()) {
 
                 return dividendShares;
             }
 
-
             JsonArray jsonArray =
                     root.getAsJsonArray();
-
 
             for (JsonElement element :
                     jsonArray) {
@@ -901,10 +2530,8 @@ public class DividendService {
                         continue;
                     }
 
-
                     JsonObject record =
                             element.getAsJsonObject();
-
 
                     String subject =
                             getStringValue(
@@ -912,13 +2539,11 @@ public class DividendService {
                                     "subject"
                             );
 
-
                     String symbol =
                             getStringValue(
                                     record,
                                     "symbol"
                             );
-
 
                     String shareName =
                             getStringValue(
@@ -926,13 +2551,11 @@ public class DividendService {
                                     "comp"
                             );
 
-
                     String exDate =
                             getStringValue(
                                     record,
                                     "exDate"
                             );
-
 
                     if (isEmpty(subject)
                             || isEmpty(symbol)
@@ -940,7 +2563,6 @@ public class DividendService {
 
                         continue;
                     }
-
 
                     if (!subject
                             .toLowerCase(
@@ -951,9 +2573,7 @@ public class DividendService {
                         continue;
                     }
 
-
                     LocalDate parsedExDate;
-
 
                     try {
 
@@ -968,19 +2588,16 @@ public class DividendService {
                         continue;
                     }
 
-
                     if (parsedExDate.isBefore(fromDate)
                             || parsedExDate.isAfter(toDate)) {
 
                         continue;
                     }
 
-
                     String dividendAmount =
                             extractDividendAmount(
                                     subject
                             );
-
 
                     if ("N/A".equalsIgnoreCase(
                             dividendAmount
@@ -989,10 +2606,8 @@ public class DividendService {
                         continue;
                     }
 
-
                     DividendData data =
                             new DividendData();
-
 
                     data.shareName =
                             shareName;
@@ -1014,9 +2629,9 @@ public class DividendService {
                     data.source =
                             "NSE";
 
-
-                    dividendShares.add(data);
-
+                    dividendShares.add(
+                            data
+                    );
 
                 } catch (Exception e) {
 
@@ -1027,7 +2642,6 @@ public class DividendService {
                 }
             }
 
-
         } catch (Exception e) {
 
             System.out.println(
@@ -1036,10 +2650,8 @@ public class DividendService {
             );
         }
 
-
         return dividendShares;
     }
-
 
     // ============================================================
     // GROWW PARSER
@@ -1055,12 +2667,10 @@ public class DividendService {
         List<DividendData> dividendShares =
                 new ArrayList<>();
 
-
         if (isEmpty(response)) {
 
             return dividendShares;
         }
-
 
         try {
 
@@ -1069,18 +2679,15 @@ public class DividendService {
                             response
                     ).getAsJsonObject();
 
-
             JsonArray exdateEvents =
                     root.getAsJsonArray(
                             "exdateEvents"
                     );
 
-
             if (exdateEvents == null) {
 
                 return dividendShares;
             }
-
 
             for (JsonElement element :
                     exdateEvents) {
@@ -1093,10 +2700,8 @@ public class DividendService {
                         continue;
                     }
 
-
                     JsonObject event =
                             element.getAsJsonObject();
-
 
                     String type =
                             getStringValue(
@@ -1104,13 +2709,11 @@ public class DividendService {
                                     "type"
                             );
 
-
                     String corporateEventFilter =
                             getStringValue(
                                     event,
                                     "corporateEventFilter"
                             );
-
 
                     if (!"DIVIDEND".equalsIgnoreCase(type)
                             || !"DIVIDEND".equalsIgnoreCase(
@@ -1120,13 +2723,11 @@ public class DividendService {
                         continue;
                     }
 
-
                     String shareName =
                             getStringValue(
                                     event,
                                     "companyShortName"
                             );
-
 
                     String symbol =
                             getStringValue(
@@ -1134,19 +2735,16 @@ public class DividendService {
                                     "nseSymbol"
                             );
 
-
                     String dividendDetails =
                             getStringValue(
                                     event,
                                     "details"
                             );
 
-
                     String exDate =
                             getGrowwExDate(
                                     event
                             );
-
 
                     if (isEmpty(shareName)
                             || isEmpty(symbol)
@@ -1156,18 +2754,15 @@ public class DividendService {
                         continue;
                     }
 
-
                     LocalDate parsedExDate =
                             parseGrowwDate(
                                     exDate
                             );
 
-
                     if (parsedExDate == null) {
 
                         continue;
                     }
-
 
                     if (parsedExDate.isBefore(fromDate)
                             || parsedExDate.isAfter(toDate)) {
@@ -1175,12 +2770,10 @@ public class DividendService {
                         continue;
                     }
 
-
                     String dividendAmount =
                             extractDividendAmount(
                                     dividendDetails
                             );
-
 
                     if ("N/A".equalsIgnoreCase(
                             dividendAmount
@@ -1189,10 +2782,8 @@ public class DividendService {
                         continue;
                     }
 
-
                     DividendData data =
                             new DividendData();
-
 
                     data.shareName =
                             shareName;
@@ -1216,9 +2807,9 @@ public class DividendService {
                     data.source =
                             "GROWW";
 
-
-                    dividendShares.add(data);
-
+                    dividendShares.add(
+                            data
+                    );
 
                 } catch (Exception e) {
 
@@ -1229,7 +2820,6 @@ public class DividendService {
                 }
             }
 
-
         } catch (Exception e) {
 
             System.out.println(
@@ -1238,13 +2828,11 @@ public class DividendService {
             );
         }
 
-
         return dividendShares;
     }
 
-
     // ============================================================
-    // MERGE + DEDUPLICATE
+    // MERGE NSE + GROWW
     // ============================================================
 
     private List<DividendData>
@@ -1253,15 +2841,8 @@ public class DividendService {
             List<DividendData> growwDividendShares
     ) {
 
-        /*
-         * LinkedHashMap preserves insertion order.
-         *
-         * NSE is inserted first.
-         * Therefore NSE gets priority.
-         */
         Map<String, DividendData> uniqueShares =
                 new LinkedHashMap<>();
-
 
         if (nseDividendShares != null) {
 
@@ -1273,20 +2854,17 @@ public class DividendService {
                     continue;
                 }
 
-
-                String symbol =
-                        normalizeSymbol(
-                                share.symbol
+                String key =
+                        createCacheKey(
+                                share
                         );
 
-
                 uniqueShares.putIfAbsent(
-                        symbol,
+                        key,
                         share
                 );
             }
         }
-
 
         if (growwDividendShares != null) {
 
@@ -1298,26 +2876,22 @@ public class DividendService {
                     continue;
                 }
 
-
-                String symbol =
-                        normalizeSymbol(
-                                share.symbol
+                String key =
+                        createCacheKey(
+                                share
                         );
 
-
                 uniqueShares.putIfAbsent(
-                        symbol,
+                        key,
                         share
                 );
             }
         }
 
-
         return new ArrayList<>(
                 uniqueShares.values()
         );
     }
-
 
     // ============================================================
     // VALID DIVIDEND DATA
@@ -1335,32 +2909,22 @@ public class DividendService {
         );
     }
 
-
     // ============================================================
     // YAHOO PARALLEL PROCESSING
     // ============================================================
 
-    private void fetchYahooSparkPricesInParallel(
-            List<DividendData> dividendShares,
-            ExecutorService executor
+    private boolean fetchYahooPricesInParallel(
+            List<DividendData> dividendShares
     ) {
 
         if (dividendShares == null
                 || dividendShares.isEmpty()) {
 
-            return;
+            return false;
         }
 
-
-        /*
-         * Only records that need Yahoo prices
-         * should be sent to Yahoo.
-         *
-         * This is important for MockData.
-         */
         List<DividendData> sharesForYahoo =
                 new ArrayList<>();
-
 
         for (DividendData share :
                 dividendShares) {
@@ -1370,33 +2934,6 @@ public class DividendService {
                 continue;
             }
 
-
-            /*
-             * Mock data with an existing price
-             * does NOT need Yahoo.
-             */
-            if ("MOCK".equalsIgnoreCase(
-                    share.source
-            )
-                    && !isEmpty(
-                    share.currentSharePrice
-            )
-                    && !"N/A".equalsIgnoreCase(
-                    share.currentSharePrice
-            )) {
-
-                continue;
-            }
-
-
-            /*
-             * Normal NSE/Groww data goes to Yahoo.
-             *
-             * Mock data without a price is also allowed
-             * to remain without a price.
-             *
-             * Therefore, do NOT send mock records to Yahoo.
-             */
             if ("MOCK".equalsIgnoreCase(
                     share.source
             )) {
@@ -1404,243 +2941,325 @@ public class DividendService {
                 continue;
             }
 
+            if (isEmpty(share.symbol)) {
 
-            sharesForYahoo.add(share);
+                continue;
+            }
+
+            if (!shouldAttemptYahoo(
+                    share
+            )) {
+
+                continue;
+            }
+
+            sharesForYahoo.add(
+                    share
+            );
         }
-
 
         if (sharesForYahoo.isEmpty()) {
 
-            return;
+            return false;
         }
 
+        System.out.println(
+                "Yahoo price requests: "
+                        + sharesForYahoo.size()
+        );
 
-        List<CompletableFuture<Void>> futures =
-                new ArrayList<>();
-
-
-        /*
-         * Split into batches of 20.
-         */
-        for (
-                int start = 0;
-                start < sharesForYahoo.size();
-                start += YAHOO_BATCH_SIZE
-        ) {
-
-            int end =
-                    Math.min(
-                            start + YAHOO_BATCH_SIZE,
-                            sharesForYahoo.size()
-                    );
-
-
-            List<DividendData> batch =
-                    new ArrayList<>(
-                            sharesForYahoo.subList(
-                                    start,
-                                    end
-                            )
-                    );
-
-
-            CompletableFuture<Void> future =
-                    CompletableFuture.runAsync(
-                            () -> fetchYahooBatch(batch),
-                            executor
-                    );
-
-
-            futures.add(future);
-        }
-
-
-        /*
-         * Wait for all Yahoo batches.
-         */
-        CompletableFuture.allOf(
-                futures.toArray(
-                        new CompletableFuture[0]
-                )
-        ).join();
-    }
-
-
-    // ============================================================
-    // YAHOO BATCH
-    // ============================================================
-
-    private void fetchYahooBatch(
-            List<DividendData> batch
-    ) {
-
-        if (batch == null
-                || batch.isEmpty()) {
-
-            return;
-        }
-
+        ExecutorService executor =
+                Executors.newFixedThreadPool(
+                        THREAD_COUNT
+                );
 
         try {
 
-            StringBuilder symbolsBuilder =
-                    new StringBuilder();
-
+            List<CompletableFuture<Boolean>> futures =
+                    new ArrayList<>();
 
             for (DividendData share :
-                    batch) {
+                    sharesForYahoo) {
 
-                if (share == null
-                        || isEmpty(share.symbol)) {
+                CompletableFuture<Boolean> future =
+                        CompletableFuture.supplyAsync(
+                                () -> fetchYahooSingleSymbol(
+                                        share
+                                ),
+                                executor
+                        );
 
-                    continue;
-                }
-
-
-                if (symbolsBuilder.length() > 0) {
-
-                    symbolsBuilder.append(",");
-                }
-
-
-                symbolsBuilder
-                        .append(
-                                normalizeSymbol(
-                                        share.symbol
-                                )
-                        )
-                        .append(".NS");
+                futures.add(
+                        future
+                );
             }
 
+            CompletableFuture.allOf(
+                    futures.toArray(
+                            new CompletableFuture[0]
+                    )
+            ).join();
 
-            if (symbolsBuilder.length() == 0) {
+            boolean changed = false;
 
-                return;
+            for (CompletableFuture<Boolean> future :
+                    futures) {
+
+                try {
+
+                    if (Boolean.TRUE.equals(
+                            future.join()
+                    )) {
+
+                        changed = true;
+                    }
+
+                } catch (Exception e) {
+
+                    System.out.println(
+                            "Yahoo future failed: "
+                                    + e.getMessage()
+                    );
+                }
             }
 
+            return changed;
 
-            String yahooApiUrl =
-                    "https://query1.finance.yahoo.com/"
-                            + "v7/finance/spark"
-                            + "?symbols="
-                            + symbolsBuilder
-                            + "&range=1d"
-                            + "&interval=1d";
+        } finally {
 
+            executor.shutdown();
+        }
+    }
+
+    // ============================================================
+    // YAHOO SINGLE SYMBOL
+    // ============================================================
+
+    private boolean fetchYahooSingleSymbol(
+            DividendData share
+    ) {
+
+        if (share == null
+                || isEmpty(share.symbol)) {
+
+            return false;
+        }
+
+        String symbol =
+                normalizeSymbol(
+                        share.symbol
+                );
+
+        String yahooSymbol =
+                symbol + ".NS";
+
+        String encodedYahooSymbol;
+
+        try {
+
+            encodedYahooSymbol =
+                    URLEncoder.encode(
+                            yahooSymbol,
+                            StandardCharsets.UTF_8.name()
+                    );
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Could not encode Yahoo symbol: "
+                            + yahooSymbol
+            );
+
+            return false;
+        }
+
+        String yahooApiUrl =
+                "https://query1.finance.yahoo.com/"
+                        + "v8/finance/chart/"
+                        + encodedYahooSymbol
+                        + "?range=1d"
+                        + "&interval=1d";
+
+        System.out.println(
+                "Calling Yahoo for: "
+                        + yahooSymbol
+        );
+
+        String attemptTime =
+                LocalDateTime.now(
+                        INDIA_ZONE
+                ).toString();
+
+        /*
+         * Store the attempt time before the HTTP request.
+         *
+         * This prevents repeated requests if Yahoo is slow
+         * or temporarily unavailable.
+         */
+        share.lastYahooAttempt =
+                attemptTime;
+
+        try {
 
             String response =
                     fetchYahooResponse(
                             yahooApiUrl
                     );
 
-
-            Map<String, YahooPriceData> priceMap =
-                    extractYahooSparkPrices(
+            YahooPriceData yahooData =
+                    extractYahooChartPrice(
                             response
                     );
 
+            if (yahooData == null
+                    || isEmpty(
+                    yahooData.currentSharePrice
+            )
+                    || "N/A".equalsIgnoreCase(
+                    yahooData.currentSharePrice
+            )) {
 
-            /*
-             * Map prices back to dividend records.
-             */
-            for (DividendData share :
-                    batch) {
+                return handleYahooNotFound(
+                        share
+                );
+            }
 
-                if (share == null) {
+            boolean changed = false;
 
-                    continue;
-                }
-
-
-                String yahooSymbol =
-                        normalizeSymbol(
-                                share.symbol
-                        ) + ".NS";
-
-
-                YahooPriceData yahooData =
-                        priceMap.get(
-                                yahooSymbol
-                        );
-
-
-                if (yahooData == null
-                        || isEmpty(
-                        yahooData.currentSharePrice
-                )
-                        || "N/A".equalsIgnoreCase(
-                        yahooData.currentSharePrice
-                )) {
-
-                    share.currentSharePrice =
-                            "N/A";
-
-                    share.chartPreviousClose =
-                            "N/A";
-
-                    continue;
-                }
-
+            if (!safeEquals(
+                    share.currentSharePrice,
+                    yahooData.currentSharePrice
+            )) {
 
                 share.currentSharePrice =
                         yahooData.currentSharePrice;
 
+                changed = true;
+            }
+
+            if (!safeEquals(
+                    share.chartPreviousClose,
+                    yahooData.chartPreviousClose
+            )) {
 
                 share.chartPreviousClose =
                         yahooData.chartPreviousClose;
+
+                changed = true;
             }
 
+            /*
+             * Successful Yahoo response clears previous
+             * NOT_FOUND state.
+             */
+            if (!isEmpty(
+                    share.yahooStatus
+            )) {
+
+                share.yahooStatus =
+                        null;
+
+                changed = true;
+            }
+
+            System.out.println(
+                    "Yahoo price updated: "
+                            + symbol
+                            + " = "
+                            + share.currentSharePrice
+                            + " | Previous Close = "
+                            + share.chartPreviousClose
+            );
+
+            return changed;
 
         } catch (Exception e) {
 
+            /*
+             * Network/API failure is NOT treated as NOT_FOUND.
+             *
+             * Existing cached prices are preserved.
+             */
             System.out.println(
-                    "Yahoo batch failed: "
+                    "Yahoo request failed for "
+                            + yahooSymbol
+                            + ": "
                             + e.getMessage()
             );
 
-
-            /*
-             * If the batch fails, all normal shares
-             * in this batch are removed later.
-             */
-            for (DividendData share :
-                    batch) {
-
-                if (share == null) {
-
-                    continue;
-                }
-
-
-                share.currentSharePrice =
-                        "N/A";
-
-
-                share.chartPreviousClose =
-                        "N/A";
-            }
+            return false;
         }
     }
 
+    // ============================================================
+    // HANDLE YAHOO NOT FOUND
+    // ============================================================
+
+    private boolean handleYahooNotFound(
+            DividendData share
+    ) {
+
+        if (share == null) {
+
+            return false;
+        }
+
+        boolean changed = false;
+
+        /*
+         * Only replace the price with N/A if there is no valid
+         * cached price already.
+         */
+        if (isEmpty(
+                share.currentSharePrice
+        )) {
+
+            share.currentSharePrice =
+                    "N/A";
+
+            changed = true;
+        }
+
+        if (isEmpty(
+                share.chartPreviousClose
+        )) {
+
+            share.chartPreviousClose =
+                    "N/A";
+
+            changed = true;
+        }
+
+        if (!"NOT_FOUND".equalsIgnoreCase(
+                share.yahooStatus
+        )) {
+
+            share.yahooStatus =
+                    "NOT_FOUND";
+
+            changed = true;
+        }
+
+        System.out.println(
+                "Yahoo price NOT_FOUND for: "
+                        + share.symbol
+        );
+
+        return changed;
+    }
 
     // ============================================================
-    // PARSE YAHOO RESPONSE
+    // PARSE YAHOO CHART RESPONSE
     // ============================================================
 
-    private Map<String, YahooPriceData>
-    extractYahooSparkPrices(
+    private YahooPriceData extractYahooChartPrice(
             String response
     ) {
 
-        Map<String, YahooPriceData> priceMap =
-                new LinkedHashMap<>();
-
-
         if (isEmpty(response)) {
 
-            return priceMap;
+            return null;
         }
-
 
         try {
 
@@ -1649,139 +3268,96 @@ public class DividendService {
                             response
                     ).getAsJsonObject();
 
+            if (!root.has("chart")
+                    || root.get("chart").isJsonNull()) {
 
-            JsonObject spark =
-                    root.getAsJsonObject(
-                            "spark"
-                    );
-
-
-            if (spark == null) {
-
-                return priceMap;
+                return null;
             }
 
+            JsonObject chart =
+                    root.getAsJsonObject(
+                            "chart"
+                    );
+
+            if (!chart.has("result")
+                    || chart.get("result").isJsonNull()) {
+
+                return null;
+            }
 
             JsonArray results =
-                    spark.getAsJsonArray(
+                    chart.getAsJsonArray(
                             "result"
                     );
 
+            if (results == null
+                    || results.isEmpty()
+                    || results.get(0).isJsonNull()) {
 
-            if (results == null) {
-
-                return priceMap;
+                return null;
             }
 
+            JsonObject firstResult =
+                    results
+                            .get(0)
+                            .getAsJsonObject();
 
-            for (JsonElement element :
-                    results) {
+            if (!firstResult.has("meta")
+                    || firstResult.get("meta").isJsonNull()) {
 
-                try {
-
-                    if (element == null
-                            || !element.isJsonObject()) {
-
-                        continue;
-                    }
-
-
-                    JsonObject result =
-                            element.getAsJsonObject();
-
-
-                    String symbol =
-                            getStringValue(
-                                    result,
-                                    "symbol"
-                            );
-
-
-                    if (isEmpty(symbol)) {
-
-                        continue;
-                    }
-
-
-                    JsonArray responseArray =
-                            result.getAsJsonArray(
-                                    "response"
-                            );
-
-
-                    if (responseArray == null
-                            || responseArray.isEmpty()) {
-
-                        continue;
-                    }
-
-
-                    JsonObject firstResponse =
-                            responseArray
-                                    .get(0)
-                                    .getAsJsonObject();
-
-
-                    JsonObject meta =
-                            firstResponse.getAsJsonObject(
-                                    "meta"
-                            );
-
-
-                    if (meta == null) {
-
-                        continue;
-                    }
-
-
-                    YahooPriceData price =
-                            new YahooPriceData();
-
-
-                    price.currentSharePrice =
-                            getFormattedNumber(
-                                    meta,
-                                    "regularMarketPrice"
-                            );
-
-
-                    price.chartPreviousClose =
-                            getFormattedNumber(
-                                    meta,
-                                    "chartPreviousClose"
-                            );
-
-
-                    priceMap.put(
-                            symbol
-                                    .trim()
-                                    .toUpperCase(),
-                            price
-                    );
-
-
-                } catch (Exception e) {
-
-                    System.out.println(
-                            "Yahoo symbol parsing failed: "
-                                    + e.getMessage()
-                    );
-                }
+                return null;
             }
 
+            JsonObject meta =
+                    firstResult.getAsJsonObject(
+                            "meta"
+                    );
+
+            YahooPriceData price =
+                    new YahooPriceData();
+
+            price.currentSharePrice =
+                    getFormattedNumber(
+                            meta,
+                            "regularMarketPrice"
+                    );
+
+            price.chartPreviousClose =
+                    getFormattedNumber(
+                            meta,
+                            "chartPreviousClose"
+                    );
+
+            if ("N/A".equalsIgnoreCase(
+                    price.chartPreviousClose
+            )) {
+
+                price.chartPreviousClose =
+                        getFormattedNumber(
+                                meta,
+                                "previousClose"
+                        );
+            }
+
+            if ("N/A".equalsIgnoreCase(
+                    price.currentSharePrice
+            )) {
+
+                return null;
+            }
+
+            return price;
 
         } catch (Exception e) {
 
             System.out.println(
-                    "Yahoo parsing failed: "
+                    "Yahoo chart parsing failed: "
                             + e.getMessage()
             );
+
+            return null;
         }
-
-
-        return priceMap;
     }
-
 
     // ============================================================
     // FORMAT YAHOO NUMBER
@@ -1800,14 +3376,12 @@ public class DividendService {
             return "N/A";
         }
 
-
         try {
 
             double value =
                     jsonObject
                             .get(key)
                             .getAsDouble();
-
 
             if (value <= 0
                     || Double.isNaN(value)
@@ -1816,16 +3390,15 @@ public class DividendService {
                 return "N/A";
             }
 
-
-            return formatPrice(value);
-
+            return formatPrice(
+                    value
+            );
 
         } catch (Exception e) {
 
             return "N/A";
         }
     }
-
 
     // ============================================================
     // GROWW EX DATE
@@ -1842,18 +3415,15 @@ public class DividendService {
                             "corporateEventPillDto"
                     );
 
-
             if (pillDto == null) {
 
                 return null;
             }
 
-
             return getStringValue(
                     pillDto,
                     "primaryDate"
             );
-
 
         } catch (Exception e) {
 
@@ -1861,9 +3431,8 @@ public class DividendService {
         }
     }
 
-
     // ============================================================
-    // GROWW DATE
+    // PARSE GROWW DATE
     // ============================================================
 
     private LocalDate parseGrowwDate(
@@ -1875,18 +3444,9 @@ public class DividendService {
             return null;
         }
 
-
         String value =
                 date.trim();
 
-
-        /*
-         * ISO:
-         *
-         * 2026-09-15
-         *
-         * 2026-09-15T00:00:00
-         */
         if (value.length() >= 10
                 && value.charAt(4) == '-'
                 && value.charAt(7) == '-') {
@@ -1894,17 +3454,16 @@ public class DividendService {
             try {
 
                 return LocalDate.parse(
-                        value.substring(0, 10)
+                        value.substring(
+                                0,
+                                10
+                        )
                 );
 
             } catch (Exception ignored) {
             }
         }
 
-
-        /*
-         * dd-MMM-yyyy
-         */
         try {
 
             return LocalDate.parse(
@@ -1915,10 +3474,8 @@ public class DividendService {
         } catch (Exception ignored) {
         }
 
-
         return null;
     }
-
 
     // ============================================================
     // EXTRACT DIVIDEND AMOUNT
@@ -1933,7 +3490,6 @@ public class DividendService {
             return "N/A";
         }
 
-
         String normalizedText =
                 text
                         .replace(
@@ -1942,34 +3498,28 @@ public class DividendService {
                         )
                         .trim();
 
-
         Matcher matcher =
                 DIVIDEND_PATTERN.matcher(
                         normalizedText
                 );
-
 
         if (matcher.find()) {
 
             return matcher.group(1);
         }
 
-
         Matcher rupeeMatcher =
                 RUPEE_PATTERN.matcher(
                         normalizedText
                 );
-
 
         if (rupeeMatcher.find()) {
 
             return rupeeMatcher.group(1);
         }
 
-
         return "N/A";
     }
-
 
     // ============================================================
     // FORMAT PRICE
@@ -1984,9 +3534,8 @@ public class DividendService {
         ).format(value);
     }
 
-
     // ============================================================
-    // GET STRING
+    // GET JSON STRING
     // ============================================================
 
     private String getStringValue(
@@ -2002,7 +3551,6 @@ public class DividendService {
             return null;
         }
 
-
         try {
 
             String value =
@@ -2010,18 +3558,15 @@ public class DividendService {
                             .get(key)
                             .getAsString();
 
-
             return isEmpty(value)
                     ? null
                     : value.trim();
-
 
         } catch (Exception e) {
 
             return null;
         }
     }
-
 
     // ============================================================
     // STRING TO DOUBLE
@@ -2037,12 +3582,14 @@ public class DividendService {
             return null;
         }
 
-
         try {
 
             return Double.parseDouble(
                     value
-                            .replace(",", "")
+                            .replace(
+                                    ",",
+                                    ""
+                            )
                             .trim()
             );
 
@@ -2051,7 +3598,6 @@ public class DividendService {
             return null;
         }
     }
-
 
     // ============================================================
     // NORMALIZE SYMBOL
@@ -2066,12 +3612,34 @@ public class DividendService {
             return "";
         }
 
-
         return symbol
                 .trim()
                 .toUpperCase();
     }
 
+    // ============================================================
+    // SAFE STRING EQUALITY
+    // ============================================================
+
+    private boolean safeEquals(
+            String first,
+            String second
+    ) {
+
+        if (first == null
+                && second == null) {
+
+            return true;
+        }
+
+        if (first == null
+                || second == null) {
+
+            return false;
+        }
+
+        return first.equals(second);
+    }
 
     // ============================================================
     // EMPTY CHECK
@@ -2085,7 +3653,6 @@ public class DividendService {
                 || value.trim().isEmpty();
     }
 
-
     // ============================================================
     // YAHOO PRICE DATA
     // ============================================================
@@ -2096,7 +3663,6 @@ public class DividendService {
 
         private String chartPreviousClose;
     }
-
 
     // ============================================================
     // DIVIDEND DATA
@@ -2119,5 +3685,43 @@ public class DividendService {
         private String chartPreviousClose;
 
         private String source;
+
+        /*
+         * Yahoo price lookup status.
+         *
+         * null / empty
+         * NOT_FOUND
+         */
+        private String yahooStatus;
+
+        /*
+         * Last time Yahoo was contacted for this symbol.
+         *
+         * This is used for the 1-minute price refresh limit.
+         */
+        private String lastYahooAttempt;
+    }
+
+    // ============================================================
+    // CACHE FILE
+    // ============================================================
+
+    private static class CacheFile {
+
+        /*
+         * Last time the JSON file itself was saved.
+         */
+        private String lastUpdated;
+
+        /*
+         * Last time NSE + Groww dividend APIs were checked.
+         */
+        private String lastDividendApiRefresh;
+
+        /*
+         * Cached dividend records.
+         */
+        private List<DividendData> dividends =
+                new ArrayList<>();
     }
 }
