@@ -167,6 +167,14 @@ function startLoadingAnimation() {
 
     const messages = [
 
+        "Loading… blame the internet...",
+        
+        "Asking the database nicely...",
+        
+        "Convincing the server this is important...",
+        
+        "Loading screen or a meditation session?",
+        
         "Scanning upcoming dividends...",
 
         "Checking ex-dividend dates...",
@@ -179,18 +187,11 @@ function startLoadingAnimation() {
 
         "Looking for money-making opportunities...",
 
+        "Preparing your dividend list...",
+        
         "Almost there...",
 
-        "Is this a loading screen or a meditation session?",
-
-        "Preparing your dividend list...",
-
-        "Loading… blame the internet...",
-
-        "Asking the database nicely...",
-
-        "Convincing the server this is important..."
-
+        "Brain updated, Next time it won’t happen..."
     ];
 
 
