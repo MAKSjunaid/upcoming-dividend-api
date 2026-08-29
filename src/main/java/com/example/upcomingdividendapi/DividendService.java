@@ -93,15 +93,18 @@ public class DividendService {
      * NSE + Groww are not called on every request.
      *
      * Once the cache has been created, a background refresh
-     * is allowed once every 5 minutes.
+     * is allowed once every 1 minute.
+     *
+     * NOTE:
+     * This is currently 1 minute for testing.
      */
-    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 60;
+    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 1;
 
     /*
      * If Yahoo cannot find a symbol, don't retry it on every
      * frontend request.
      */
-    private static final int YAHOO_NOT_FOUND_RETRY_DAYS = 7;
+    private static final int YAHOO_NOT_FOUND_RETRY_DAYS = 2;
 
     /*
      * Trading hours:
@@ -219,9 +222,6 @@ public class DividendService {
         // 3. TO DATE
         // ========================================================
 
-        /*
-         * Default window is now exactly 30 days.
-         */
         LocalDate toDateValue;
 
         if (isEmpty(requestedToDate)) {
@@ -323,13 +323,6 @@ public class DividendService {
         // 9. CACHE DOES NOT EXIST / REQUEST OUTSIDE CACHE WINDOW
         // ========================================================
 
-        /*
-         * If there is no cache, we MUST fetch synchronously because
-         * we have nothing to return.
-         *
-         * If the user specifically requests a date range outside
-         * the normal 30-day window, we also fetch synchronously.
-         */
         if (!requestInsideNormalWindow
                 || cache.dividends.isEmpty()) {
 
@@ -376,7 +369,30 @@ public class DividendService {
         // 10. MOCK DATA
         // ========================================================
 
+        /*
+         * IMPORTANT:
+         *
+         * MockData is now handled in two ways:
+         *
+         * 1. If MockData.hasMockData() == true:
+         *      Existing mock records are merged into cache.
+         *
+         * 2. If MockData.hasMockData() == false:
+         *      Any previously cached MOCK records are removed.
+         *
+         * This allows old mock records to be automatically
+         * removed from dividend-cache.json after MockData.java
+         * is cleared.
+         *
+         * If MOCK records are removed, cacheChanged becomes true.
+         * Later saveCache(cache, true) will increment the version.
+         */
+
         if (MockData.hasMockData()) {
+
+            System.out.println(
+                    "MockData detected."
+            );
 
             List<DividendData> mockDividendShares =
                     convertMockDataToDividendData();
@@ -400,35 +416,50 @@ public class DividendService {
                     cacheChanged = true;
                 }
             }
+
+        } else {
+
+            /*
+             * MockData.java currently contains no mock data.
+             *
+             * Remove any MOCK records that were previously
+             * stored in the persistent cache.
+             */
+            boolean mockRecordsRemoved =
+                    removeCachedMockRecords(
+                            cache
+                    );
+
+            if (mockRecordsRemoved) {
+
+                cacheChanged = true;
+            }
         }
 
         // ========================================================
         // 11. SAVE CACHE AFTER SYNCHRONOUS DIVIDEND PROCESSING
         // ========================================================
 
+        /*
+         * IMPORTANT:
+         *
+         * cacheChanged means the actual frontend-visible
+         * dividend data changed.
+         *
+         * Therefore saveCache(..., true) increments the version.
+         */
         if (cacheChanged) {
 
-            saveCache(cache);
+            saveCache(
+                    cache,
+                    true
+            );
         }
 
         // ========================================================
         // 12. START BACKGROUND DIVIDEND REFRESH
         // ========================================================
 
-        /*
-         * IMPORTANT:
-         *
-         * We don't want every frontend request to wait for
-         * NSE + Groww.
-         *
-         * Existing cached data is returned immediately.
-         *
-         * If the dividend refresh interval has expired,
-         * a background task checks NSE + Groww.
-         *
-         * The next frontend refresh will receive the updated
-         * cache data.
-         */
         startBackgroundDividendRefreshIfNeeded(
                 cache
         );
@@ -449,29 +480,6 @@ public class DividendService {
         // ========================================================
 
         boolean priceChanged = false;
-
-        // ========================================================
-        // NEWLY ADDED DATA IS HANDLED BY BACKGROUND REFRESH
-        // ========================================================
-
-        /*
-         * Existing cached data is intentionally reused here.
-         *
-         * Newly discovered dividends are handled by the
-         * background refresh method.
-         *
-         * This is important for non-trading hours:
-         *
-         * 5:00 PM
-         *     ↓
-         * NSE/Groww finds new dividend
-         *     ↓
-         * only that new symbol
-         *     ↓
-         * Yahoo price lookup
-         *     ↓
-         * cache updated
-         */
 
         // ========================================================
         // NORMAL ACTIVE-WINDOW PRICE REFRESH
@@ -516,12 +524,6 @@ public class DividendService {
                     "Existing cached prices will be reused."
             );
 
-            /*
-             * Only shares which do not have a cached price are
-             * allowed to call Yahoo outside trading hours.
-             *
-             * This normally means a newly discovered dividend.
-             */
             List<DividendData> sharesWithoutPrice =
                     getSharesWithoutPrice(
                             requestedShares
@@ -551,9 +553,17 @@ public class DividendService {
         // 15. SAVE UPDATED PRICE DATA
         // ========================================================
 
+        /*
+         * Yahoo price changes are frontend-visible changes.
+         *
+         * Therefore the version must also increment here.
+         */
         if (priceChanged) {
 
-            saveCache(cache);
+            saveCache(
+                    cache,
+                    true
+            );
         }
 
         // ========================================================
@@ -661,6 +671,135 @@ public class DividendService {
     }
 
     // ============================================================
+    // REMOVE CACHED MOCK RECORDS
+    // ============================================================
+
+    /*
+     * Removes all previously cached records whose source is MOCK.
+     *
+     * This is intentionally separate from removeExpiredCacheRecords().
+     *
+     * A MOCK record should be removed when MockData.java no longer
+     * contains mock data, even if its ex-date is still in the future.
+     *
+     * Example:
+     *
+     * Old MockData:
+     *
+     *     TIM
+     *     31-Aug-2026
+     *
+     * Current date:
+     *
+     *     29-Aug-2026
+     *
+     * The record is NOT expired yet, but it should still be removed
+     * because MockData has been cleared.
+     */
+    private boolean removeCachedMockRecords(
+            CacheFile cache
+    ) {
+
+        if (cache == null
+                || cache.dividends == null
+                || cache.dividends.isEmpty()) {
+
+            return false;
+        }
+
+        int oldSize =
+                cache.dividends.size();
+
+        cache.dividends.removeIf(
+                share -> {
+
+                    if (share == null) {
+
+                        return false;
+                    }
+
+                    return "MOCK".equalsIgnoreCase(
+                            share.source
+                    );
+                }
+        );
+
+        int removedCount =
+                oldSize - cache.dividends.size();
+
+        if (removedCount > 0) {
+
+            System.out.println(
+                    "================================================"
+            );
+
+            System.out.println(
+                    "Removed "
+                            + removedCount
+                            + " old MOCK record(s) from cache."
+            );
+
+            System.out.println(
+                    "MockData.java contains no active mock data."
+            );
+
+            System.out.println(
+                    "Cache will be saved and version will be incremented."
+            );
+
+            System.out.println(
+                    "================================================"
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    // ============================================================
+    // CACHE VERSION
+    // ============================================================
+
+    /**
+     * Returns the current cache version.
+     *
+     * This method is intentionally lightweight.
+     *
+     * It only reads the version from dividend-cache.json.
+     *
+     * It does NOT:
+     * - call NSE
+     * - call Groww
+     * - call Yahoo
+     * - refresh dividend data
+     * - refresh prices
+     * - modify the cache
+     *
+     * The frontend can safely call this every 1 minute.
+     */
+    public String getCacheVersion() {
+
+        CacheFile cache =
+                loadCache();
+
+        /*
+         * Old cache files created before the version feature
+         * may have version = 0.
+         *
+         * Treat them as version 1.
+         */
+        if (cache.version <= 0) {
+
+            return "1";
+        }
+
+        return String.valueOf(
+                cache.version
+        );
+    }
+
+    // ============================================================
     // BACKGROUND DIVIDEND REFRESH
     // ============================================================
 
@@ -693,10 +832,16 @@ public class DividendService {
         }
 
         /*
-         * Mark the attempt immediately.
+         * Mark the API refresh attempt immediately.
          *
-         * This prevents several incoming frontend requests
-         * from starting multiple refreshes.
+         * IMPORTANT:
+         *
+         * This changes only cache metadata.
+         *
+         * Therefore saveCache(..., false) is used.
+         *
+         * The frontend version does NOT change merely because
+         * NSE/Groww was checked.
          */
         synchronized (CACHE_LOCK) {
 
@@ -709,7 +854,8 @@ public class DividendService {
                     ).toString();
 
             saveCache(
-                    latestCache
+                    latestCache,
+                    false
             );
         }
 
@@ -852,6 +998,25 @@ public class DividendService {
                 continue;
             }
 
+            /*
+             * Check whether the record already existed BEFORE
+             * merging it.
+             *
+             * This allows us to distinguish:
+             *
+             * new dividend
+             * vs
+             * updated existing dividend.
+             */
+            DividendData existingBeforeMerge =
+                    findCachedDividend(
+                            cache,
+                            fresh
+                    );
+
+            boolean wasNewRecord =
+                    existingBeforeMerge == null;
+
             boolean changed =
                     addOrUpdateDividendInCache(
                             cache,
@@ -862,26 +1027,15 @@ public class DividendService {
 
                 cacheChanged = true;
 
-                DividendData cached =
-                        findCachedDividend(
-                                cache,
-                                fresh
-                        );
+                if (wasNewRecord) {
 
-                if (cached != null) {
+                    DividendData cached =
+                            findCachedDividend(
+                                    cache,
+                                    fresh
+                            );
 
-                    /*
-                     * Only genuinely new dividend records are
-                     * added to this list.
-                     *
-                     * Existing records with changed dividend
-                     * details are NOT treated as new Yahoo
-                     * requests.
-                     */
-                    if (isNewDividendRecord(
-                            cached,
-                            fresh
-                    )) {
+                    if (cached != null) {
 
                         newlyAddedDividends.add(
                                 cached
@@ -891,19 +1045,21 @@ public class DividendService {
             }
         }
 
-        /*
-         * The method above may not be able to distinguish an
-         * updated existing record from a new record after merge.
-         *
-         * Therefore we perform an explicit check below using
-         * the cache state before/after would normally be needed.
-         *
-         * For safety, outside trading hours we only fetch Yahoo
-         * for records which do not already have a cached price.
-         */
+        // ========================================================
+        // SAVE CHANGED DIVIDEND DATA
+        // ========================================================
+
         if (cacheChanged) {
 
-            saveCache(cache);
+            /*
+             * Dividend data changed.
+             *
+             * Therefore increment the version.
+             */
+            saveCache(
+                    cache,
+                    true
+            );
         }
 
         // ========================================================
@@ -986,7 +1142,16 @@ public class DividendService {
 
                     if (priceChanged) {
 
-                        saveCache(cache);
+                        /*
+                         * Yahoo price changed.
+                         *
+                         * Increment version because the frontend
+                         * consumes the current price.
+                         */
+                        saveCache(
+                                cache,
+                                true
+                        );
                     }
                 }
             }
@@ -999,42 +1164,6 @@ public class DividendService {
         System.out.println(
                 "------------------------------------------------"
         );
-    }
-
-    // ============================================================
-    // CHECK NEW DIVIDEND RECORD
-    // ============================================================
-
-    private boolean isNewDividendRecord(
-            DividendData cached,
-            DividendData incoming
-    ) {
-
-        if (cached == null
-                || incoming == null) {
-
-            return false;
-        }
-
-        /*
-         * If the record already has a valid current price,
-         * it is not a new share requiring an initial Yahoo call.
-         */
-        if (!isEmpty(
-                cached.currentSharePrice
-        )
-                && !"N/A".equalsIgnoreCase(
-                cached.currentSharePrice
-        )) {
-
-            return false;
-        }
-
-        /*
-         * If the incoming dividend is currently being merged and
-         * the cached record has no price, it can be a new record.
-         */
-        return true;
     }
 
     // ============================================================
@@ -1225,6 +1354,21 @@ public class DividendService {
                             new ArrayList<>();
                 }
 
+                /*
+                 * Backward compatibility:
+                 *
+                 * Older dividend-cache.json files do not have
+                 * a version field.
+                 *
+                 * Gson therefore gives version = 0.
+                 *
+                 * We treat those files as version 1.
+                 */
+                if (cache.version <= 0) {
+
+                    cache.version = 1;
+                }
+
                 return cache;
 
             } catch (Exception e) {
@@ -1243,13 +1387,62 @@ public class DividendService {
     // SAVE CACHE
     // ============================================================
 
+    /**
+     * Saves the cache.
+     *
+     * @param cache cache object
+     * @param dataChanged true when frontend-visible data changed
+     */
     private void saveCache(
-            CacheFile cache
+            CacheFile cache,
+            boolean dataChanged
     ) {
 
         synchronized (CACHE_LOCK) {
 
             try {
+
+                if (cache == null) {
+
+                    return;
+                }
+
+                /*
+                 * Make sure version always has a valid value.
+                 */
+                if (cache.version <= 0) {
+
+                    cache.version = 1;
+                }
+
+                /*
+                 * Only increment the version when actual
+                 * frontend-visible data has changed.
+                 *
+                 * Examples:
+                 *
+                 * - new dividend
+                 * - dividend amount changed
+                 * - expired dividend removed
+                 * - current price changed
+                 * - previous close changed
+                 *
+                 * Metadata-only changes do NOT increment it.
+                 */
+                if (dataChanged) {
+
+                    cache.version++;
+                }
+
+                /*
+                 * lastUpdated is only metadata.
+                 *
+                 * It does NOT itself cause a version increment.
+                 */
+                cache.lastUpdated =
+                        LocalDateTime.now(
+                                INDIA_ZONE
+                        ).toString();
 
                 File directory =
                         new File(
@@ -1271,11 +1464,6 @@ public class DividendService {
                         return;
                     }
                 }
-
-                cache.lastUpdated =
-                        LocalDateTime.now(
-                                INDIA_ZONE
-                        ).toString();
 
                 File cacheFile =
                         getCacheFile();
@@ -1326,6 +1514,32 @@ public class DividendService {
                 System.out.println(
                         "Cache saved successfully."
                 );
+
+                System.out.println(
+                        "Cache version: "
+                                + cache.version
+                );
+
+                if (dataChanged) {
+
+                    System.out.println(
+                            "Frontend-visible cache data changed."
+                    );
+
+                    System.out.println(
+                            "Cache version incremented."
+                    );
+
+                } else {
+
+                    System.out.println(
+                            "Only cache metadata changed."
+                    );
+
+                    System.out.println(
+                            "Cache version was not incremented."
+                    );
+                }
 
             } catch (Exception e) {
 
@@ -1402,6 +1616,12 @@ public class DividendService {
                             + " expired dividend record(s) from cache."
             );
 
+            /*
+             * This is a frontend-visible data change.
+             *
+             * The caller will save with dataChanged = true,
+             * which increments the version.
+             */
             return true;
         }
 
@@ -1698,14 +1918,10 @@ public class DividendService {
             }
         }
 
-        /*
-         * ========================================================
-         * IMPORTANT 1-MINUTE PRICE CACHE
-         * ========================================================
-         *
-         * If Yahoo was contacted less than one minute ago,
-         * don't call Yahoo again.
-         */
+        // ========================================================
+        // IMPORTANT 1-MINUTE PRICE CACHE
+        // ========================================================
+
         if (!isEmpty(
                 share.lastYahooAttempt
         )) {
@@ -1744,9 +1960,6 @@ public class DividendService {
 
             } catch (Exception e) {
 
-                /*
-                 * If timestamp is invalid, allow a fresh lookup.
-                 */
                 return true;
             }
         }
@@ -1849,14 +2062,6 @@ public class DividendService {
                     existingKey
             )) {
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * The old code ignored the return value here.
-                 *
-                 * If NSE/Groww updates dividend details, the cache
-                 * must know that it changed.
-                 */
                 return mergeExistingDividendFields(
                         existing,
                         incoming
@@ -3151,6 +3356,8 @@ public class DividendService {
             /*
              * Successful Yahoo response clears previous
              * NOT_FOUND state.
+             *
+             * This is also a cache data change.
              */
             if (!isEmpty(
                     share.yahooStatus
@@ -3709,12 +3916,30 @@ public class DividendService {
     private static class CacheFile {
 
         /*
+         * ========================================================
+         * CACHE VERSION
+         * ========================================================
+         *
+         * This represents the version of the actual data that
+         * the frontend consumes.
+         *
+         * It changes ONLY when frontend-visible data changes.
+         *
+         * It does NOT change just because the cache file was saved.
+         */
+        private long version = 1;
+
+        /*
          * Last time the JSON file itself was saved.
+         *
+         * This is metadata only and does NOT affect version.
          */
         private String lastUpdated;
 
         /*
          * Last time NSE + Groww dividend APIs were checked.
+         *
+         * This is metadata only and does NOT affect version.
          */
         private String lastDividendApiRefresh;
 
