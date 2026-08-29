@@ -986,6 +986,122 @@ body {
 
 
 /* =========================================================
+   PAGINATION
+   ========================================================= */
+
+.pagination {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    flex-wrap: wrap;
+
+    gap: 6px;
+
+    padding: 0 12px 24px;
+}
+
+
+.pagination-button {
+
+    min-width: 34px;
+
+    height: 34px;
+
+    padding: 0 9px;
+
+    border: 1px solid #dfe3ea;
+
+    border-radius: 10px;
+
+    background: #ffffff;
+
+    color: #172033;
+
+    font-family: inherit;
+
+    font-size: 11px;
+
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        transform 0.18s ease;
+}
+
+
+.pagination-button:hover {
+
+    border-color: #bfc6d3;
+
+    transform: translateY(-1px);
+}
+
+
+.pagination-button.active {
+
+    background: #172033;
+
+    border-color: #172033;
+
+    color: #ffffff;
+}
+
+
+.pagination-button:disabled {
+
+    opacity: 0.40;
+
+    cursor: default;
+
+    transform: none;
+}
+
+
+.pagination-button.previous,
+.pagination-button.next {
+
+    min-width: 72px;
+}
+
+
+.pagination-ellipsis {
+
+    min-width: 20px;
+
+    text-align: center;
+
+    color: #8992a3;
+
+    font-size: 12px;
+
+    font-weight: 700;
+}
+
+
+.pagination-info {
+
+    width: 100%;
+
+    margin-top: 2px;
+
+    text-align: center;
+
+    color: #8992a3;
+
+    font-size: 10px;
+
+    font-weight: 600;
+}
+
+
+/* =========================================================
    TOMORROW WHOLE CARD HIGHLIGHT
    ========================================================= */
 
@@ -1732,6 +1848,24 @@ body {
     .tomorrow-badge {
         font-size: 9px;
     }
+
+    .pagination {
+        gap: 5px;
+        padding-left: 11px;
+        padding-right: 11px;
+    }
+
+    .pagination-button {
+        min-width: 32px;
+        height: 32px;
+        padding: 0 7px;
+        font-size: 10px;
+    }
+
+    .pagination-button.previous,
+    .pagination-button.next {
+        min-width: 65px;
+    }
 }
 
 
@@ -1802,4 +1936,5 @@ body {
     }
 }
 
-/*final for today css */
+
+/* final with pagination */
