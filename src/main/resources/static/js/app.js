@@ -68,6 +68,10 @@ const favoriteFlyStar =
     document.getElementById("favoriteFlyStar");
 
 
+/* =========================================================
+   DATA / UI STATE
+   ========================================================= */
+
 let dividendData = [];
 
 let currentInvestment = null;
@@ -78,37 +82,37 @@ let loadingMessageTimer = null;
 
 
 /* =========================================================
-   AUTOMATIC REFRESH
+   PAGINATION
    ========================================================= */
 
 /*
- * Automatically refresh dividend data every 1 minute.
+ * Number of shares displayed on one page.
  *
- * Important:
+ * IMPORTANT:
  *
- * This is a SILENT refresh.
+ * dividendData still contains ALL shares.
  *
- * It does NOT:
- *
- * - reset sorting
- * - reset favorites
- * - reset investment
- * - show loading animation
- * - close search panel
- * - scroll the page
- * - change selected dates
- *
- * The latest API data is simply loaded and the
- * existing UI state is reapplied.
+ * Pagination only controls how many cards
+ * are rendered on the screen.
  */
+
+const PAGE_SIZE = 30;
+
+let currentPage = 1;
+
+
+/* =========================================================
+   VERSIONED AUTOMATIC REFRESH
+   ========================================================= */
 
 const AUTO_REFRESH_INTERVAL =
     60 * 1000;
 
-
 let autoRefreshTimer = null;
 
 let autoRefreshing = false;
+
+let currentDataVersion = null;
 
 
 /* =========================================================
@@ -165,16 +169,17 @@ function startLoadingAnimation() {
         return;
     }
 
+
     const messages = [
 
         "Loading… blame the internet...",
-        
+
         "Asking the database nicely...",
-        
+
         "Convincing the server this is important...",
-        
+
         "Loading screen or a meditation session?",
-        
+
         "Scanning upcoming dividends...",
 
         "Checking ex-dividend dates...",
@@ -188,10 +193,11 @@ function startLoadingAnimation() {
         "Looking for money-making opportunities...",
 
         "Preparing your dividend list...",
-        
+
         "Almost there...",
 
         "Brain updated, Next time it won’t happen..."
+
     ];
 
 
@@ -754,9 +760,86 @@ sortFilter.addEventListener(
         currentSort =
             sortFilter.value;
 
+        /*
+         * Whenever the user changes the
+         * sorting/filter, start from page 1.
+         */
+
+        currentPage = 1;
+
         sortStocks();
     }
 );
+
+
+/* =========================================================
+   PAGINATION
+   ========================================================= */
+
+function goToPage(page) {
+
+    const requestedPage =
+        Number(page);
+
+
+    if (
+        isNaN(requestedPage) ||
+        requestedPage < 1
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * We calculate the number of pages
+     * from the currently visible dataset.
+     *
+     * The actual filtered/sorted dataset
+     * is prepared by sortStocks().
+     *
+     * renderStocks() will also protect
+     * against an invalid page.
+     */
+
+    currentPage =
+        Math.floor(
+            requestedPage
+        );
+
+
+    sortStocks();
+
+
+    /*
+     * Move the user back to the beginning
+     * of the stock list after changing page.
+     *
+     * We do not force the very top of the
+     * entire page because the sticky filter
+     * should remain useful.
+     */
+
+    if (stockList) {
+
+        const rect =
+            stockList.getBoundingClientRect();
+
+        const scrollTop =
+            window.scrollY +
+            rect.top -
+            10;
+
+
+        window.scrollTo({
+            top: Math.max(
+                0,
+                scrollTop
+            ),
+            behavior: "smooth"
+        });
+    }
+}
 
 
 /* =========================================================
@@ -904,7 +987,7 @@ function resolveDates() {
     ) {
 
         throw new Error(
-            "To Date cannot be earlier than From Date."
+            "To Date can not be earlier than From Date."
         );
     }
 
@@ -917,12 +1000,135 @@ function resolveDates() {
 
 
 /* =========================================================
+   FETCH DIVIDEND DATA
+   ========================================================= */
+
+async function fetchDividendData(
+    fromValue,
+    toValue
+) {
+
+    const response =
+        await fetch(
+            "/api/dividends",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify(
+                        {
+                            from_date:
+                                formatApiDate(
+                                    fromValue
+                                ),
+
+                            to_date:
+                                formatApiDate(
+                                    toValue
+                                )
+                        }
+                    )
+            }
+        );
+
+
+    if (!response.ok) {
+
+        const message =
+            await response.text();
+
+
+        throw new Error(
+            message ||
+            "Unable to fetch dividend data."
+        );
+    }
+
+
+    const data =
+        await response.json();
+
+
+    if (!Array.isArray(data)) {
+
+        throw new Error(
+            "API returned an invalid dividend response."
+        );
+    }
+
+
+    return data;
+}
+
+
+/* =========================================================
+   GET BACKEND VERSION
+   ========================================================= */
+
+async function getBackendVersion() {
+
+    const response =
+        await fetch(
+            "/api/dividends/version",
+            {
+                method: "GET",
+
+                cache: "no-store"
+            }
+        );
+
+
+    if (!response.ok) {
+
+        throw new Error(
+            "Unable to check dividend version."
+        );
+    }
+
+
+    const versionData =
+        await response.json();
+
+
+    if (
+        !versionData ||
+        versionData.version === undefined ||
+        versionData.version === null
+    ) {
+
+        throw new Error(
+            "Backend returned an invalid dividend version."
+        );
+    }
+
+
+    return String(
+        versionData.version
+    );
+}
+
+
+/* =========================================================
    SEARCH
    ========================================================= */
 
 async function searchDividends() {
 
     clearMessages();
+
+
+    /*
+     * A new search represents a new result set.
+     *
+     * Always start from page 1.
+     */
+
+    currentPage = 1;
 
 
     let dates;
@@ -987,57 +1193,82 @@ async function searchDividends() {
 
     try {
 
-        const response =
-            await fetch(
-                "/api/dividends",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify(
-                            {
-                                from_date:
-                                    formatApiDate(
-                                        dates.from
-                                    ),
-
-                                to_date:
-                                    formatApiDate(
-                                        dates.to
-                                    )
-                            }
-                        )
-                }
-            );
+        let versionBeforeSearch = null;
 
 
-        if (!response.ok) {
+        try {
 
-            const message =
-                await response.text();
+            versionBeforeSearch =
+                await getBackendVersion();
 
+        } catch (versionError) {
 
-            throw new Error(
-                message ||
-                "Unable to fetch dividend data."
+            console.warn(
+                "Unable to get version before search:",
+                versionError
             );
         }
 
 
         const data =
-            await response.json();
-
-
-        if (!Array.isArray(data)) {
-
-            throw new Error(
-                "API returned an invalid dividend response."
+            await fetchDividendData(
+                dates.from,
+                dates.to
             );
+
+
+        let versionAfterSearch = null;
+
+
+        try {
+
+            versionAfterSearch =
+                await getBackendVersion();
+
+        } catch (versionError) {
+
+            console.warn(
+                "Unable to get version after search:",
+                versionError
+            );
+        }
+
+
+        let finalData =
+            data;
+
+
+        if (
+            versionBeforeSearch !== null &&
+            versionAfterSearch !== null &&
+            versionBeforeSearch !==
+                versionAfterSearch
+        ) {
+
+            console.log(
+                "Dividend data changed during search. Fetching latest data..."
+            );
+
+
+            finalData =
+                await fetchDividendData(
+                    dates.from,
+                    dates.to
+                );
+
+
+            try {
+
+                versionAfterSearch =
+                    await getBackendVersion();
+
+            } catch (versionError) {
+
+                console.warn(
+                    "Unable to get final dividend version:",
+                    versionError
+                );
+            }
         }
 
 
@@ -1059,19 +1290,12 @@ async function searchDividends() {
 
 
         dividendData =
-            data;
+            finalData;
 
 
         currentInvestment =
             investment;
 
-
-        /*
-         * Always reset to Dividend: High
-         * after a new manual search.
-         *
-         * This existing behavior is preserved.
-         */
 
         currentSort =
             "dividendDesc";
@@ -1079,6 +1303,14 @@ async function searchDividends() {
 
         sortFilter.value =
             "dividendDesc";
+
+
+        /*
+         * currentPage is already 1 because
+         * this is a new search.
+         */
+
+        currentPage = 1;
 
 
         sortStocks();
@@ -1094,6 +1326,15 @@ async function searchDividends() {
             top: 0,
             behavior: "smooth"
         });
+
+
+        if (
+            versionAfterSearch !== null
+        ) {
+
+            currentDataVersion =
+                versionAfterSearch;
+        }
 
 
     } catch (e) {
@@ -1124,34 +1365,15 @@ async function searchDividends() {
 
 
 /* =========================================================
-   AUTOMATIC REFRESH FUNCTION
+   VERSION-CHECK AUTOMATIC REFRESH
    ========================================================= */
 
-/*
- * Fetch the latest dividend data without changing
- * the user's current UI state.
- *
- * This is intentionally separate from searchDividends()
- * because searchDividends() is designed for a manual
- * search and intentionally resets sorting.
- */
-
 async function autoRefreshDividends() {
-
-    /*
-     * Do not start another automatic refresh
-     * while one is already running.
-     */
 
     if (autoRefreshing) {
         return;
     }
 
-
-    /*
-     * Do not interfere with the existing manual
-     * search or pull-to-refresh operation.
-     */
 
     if (
         refreshing ||
@@ -1164,11 +1386,6 @@ async function autoRefreshDividends() {
         return;
     }
 
-
-    /*
-     * There is nothing to refresh if the user
-     * has not completed the initial search yet.
-     */
 
     if (
         !fromDate.value ||
@@ -1184,87 +1401,79 @@ async function autoRefreshDividends() {
 
     try {
 
-        const response =
-            await fetch(
-                "/api/dividends",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify(
-                            {
-                                from_date:
-                                    formatApiDate(
-                                        fromDate.value
-                                    ),
-
-                                to_date:
-                                    formatApiDate(
-                                        toDate.value
-                                    )
-                            }
-                        )
-                }
-            );
+        const backendVersion =
+            await getBackendVersion();
 
 
-        if (!response.ok) {
+        if (
+            currentDataVersion === null
+        ) {
 
-            /*
-             * Silent failure.
-             *
-             * Automatic refresh should never
-             * disturb the existing UI if the API
-             * temporarily fails.
-             */
+            currentDataVersion =
+                backendVersion;
+
+            return;
+        }
+
+
+        if (
+            backendVersion ===
+            currentDataVersion
+        ) {
 
             return;
         }
 
 
         const data =
-            await response.json();
+            await fetchDividendData(
+                fromDate.value,
+                toDate.value
+            );
 
 
-        if (!Array.isArray(data)) {
+        let confirmedVersion =
+            backendVersion;
 
-            return;
+
+        try {
+
+            confirmedVersion =
+                await getBackendVersion();
+
+        } catch (versionError) {
+
+            console.warn(
+                "Unable to confirm dividend version after automatic refresh:",
+                versionError
+            );
         }
 
-
-        /*
-         * Replace the old data with the newest
-         * API response.
-         */
 
         dividendData =
             data;
 
 
+        currentDataVersion =
+            confirmedVersion;
+
+
         /*
          * IMPORTANT:
          *
-         * We intentionally DO NOT change:
+         * Do not reset:
          *
+         * currentPage
          * currentSort
          * currentInvestment
          * favorites
-         *
          * sortFilter.value
          *
-         * Therefore whatever the user is currently
-         * looking at remains selected.
-         */
-
-
-        /*
-         * Reapply the current sorting/filtering
-         * and investment calculations.
+         * Existing UI state remains intact.
+         *
+         * If the new data has fewer pages,
+         * renderStocks() will automatically
+         * move currentPage to the last valid page.
          */
 
         sortStocks();
@@ -1272,15 +1481,8 @@ async function autoRefreshDividends() {
 
     } catch (e) {
 
-        /*
-         * Silent automatic refresh.
-         *
-         * Do not show an error popup/message because
-         * the user may currently be using the UI.
-         */
-
         console.warn(
-            "Automatic dividend refresh failed:",
+            "Automatic dividend version check failed:",
             e
         );
 
@@ -1292,14 +1494,10 @@ async function autoRefreshDividends() {
 
 
 /* =========================================================
-   START AUTOMATIC REFRESH
+   START AUTOMATIC VERSION CHECK
    ========================================================= */
 
 function startAutomaticRefresh() {
-
-    /*
-     * Prevent duplicate intervals.
-     */
 
     if (autoRefreshTimer !== null) {
 
@@ -1309,10 +1507,6 @@ function startAutomaticRefresh() {
     }
 
 
-    /*
-     * Refresh every 60 seconds.
-     */
-
     autoRefreshTimer =
         setInterval(
             autoRefreshDividends,
@@ -1320,14 +1514,6 @@ function startAutomaticRefresh() {
         );
 }
 
-
-/*
- * Start the automatic refresh timer once
- * when this JavaScript file loads.
- *
- * The first automatic refresh will happen
- * 60 seconds after page load.
- */
 
 startAutomaticRefresh();
 
@@ -1385,11 +1571,6 @@ function updateSummary(
    ========================================================= */
 
 function getInvestmentShares(stock) {
-
-    /*
-     * No investment:
-     * We consider one share.
-     */
 
     if (
         currentInvestment === null ||
@@ -1451,12 +1632,6 @@ function getDividendYield(stock) {
     }
 
 
-    /*
-     * Dividend Yield:
-     *
-     * (Dividend / Current Price) × 100
-     */
-
     return (
         dividend /
         price
@@ -1485,12 +1660,6 @@ function getExpectedDividend(stock) {
     }
 
 
-    /*
-     * No investment:
-     *
-     * Expected dividend for 1 share.
-     */
-
     if (
         currentInvestment === null ||
         currentInvestment <= 0
@@ -1503,10 +1672,6 @@ function getExpectedDividend(stock) {
     const shares =
         getInvestmentShares(stock);
 
-
-    /*
-     * User cannot buy even one share.
-     */
 
     if (shares <= 0) {
         return 0;
@@ -1525,17 +1690,6 @@ function getExpectedDividend(stock) {
    ========================================================= */
 
 function sortByDividendHigh(a, b) {
-
-    /*
-     * =====================================================
-     * NO INVESTMENT
-     * =====================================================
-     *
-     * Highest dividend yield first.
-     *
-     * Yield =
-     * (Dividend / Current Price) × 100
-     */
 
     if (
         currentInvestment === null ||
@@ -1560,31 +1714,11 @@ function sortByDividendHigh(a, b) {
         }
 
 
-        /*
-         * If yield is equal,
-         * higher dividend/share first.
-         */
-
         return (
             Number(b.dividend_amount || 0) -
             Number(a.dividend_amount || 0)
         );
     }
-
-
-    /*
-     * =====================================================
-     * INVESTMENT ENTERED
-     * =====================================================
-     *
-     * Highest achievable expected dividend first.
-     *
-     * Shares =
-     * floor(Investment / Current Price)
-     *
-     * Expected Dividend =
-     * Shares × Dividend
-     */
 
 
     const sharesA =
@@ -1593,11 +1727,6 @@ function sortByDividendHigh(a, b) {
     const sharesB =
         getInvestmentShares(b);
 
-
-    /*
-     * Stocks user cannot afford
-     * always go to the bottom.
-     */
 
     if (
         sharesA === 0 &&
@@ -1624,10 +1753,6 @@ function sortByDividendHigh(a, b) {
         getExpectedDividend(b);
 
 
-    /*
-     * Highest Expected Dividend first.
-     */
-
     if (
         expectedB !== expectedA
     ) {
@@ -1638,11 +1763,6 @@ function sortByDividendHigh(a, b) {
         );
     }
 
-
-    /*
-     * Tie breaker:
-     * Higher dividend yield first.
-     */
 
     const yieldA =
         getDividendYield(a);
@@ -1662,11 +1782,6 @@ function sortByDividendHigh(a, b) {
     }
 
 
-    /*
-     * Final tie breaker:
-     * Higher dividend/share first.
-     */
-
     return (
         Number(b.dividend_amount || 0) -
         Number(a.dividend_amount || 0)
@@ -1679,16 +1794,6 @@ function sortByDividendHigh(a, b) {
    ========================================================= */
 
 function sortByDividendLow(a, b) {
-
-    /*
-     * =====================================================
-     * INVESTMENT ENTERED
-     * =====================================================
-     *
-     * Lowest eligible Expected Dividend first.
-     *
-     * Zero-share stocks remain at the bottom.
-     */
 
     if (
         currentInvestment !== null &&
@@ -1745,14 +1850,6 @@ function sortByDividendLow(a, b) {
     }
 
 
-    /*
-     * =====================================================
-     * NO INVESTMENT
-     * =====================================================
-     *
-     * Lowest dividend yield first.
-     */
-
     return (
         getDividendYield(a) -
         getDividendYield(b)
@@ -1773,7 +1870,8 @@ function sortStocks() {
 
         renderStocks(
             [],
-            currentInvestment
+            currentInvestment,
+            dividendData
         );
 
         return;
@@ -1784,10 +1882,18 @@ function sortStocks() {
         [...dividendData];
 
 
+    /* =====================================================
+       FAVORITES
+       ===================================================== */
+
     if (
         currentSort ===
         "favorites"
     ) {
+
+        /*
+         * First keep only favorites.
+         */
 
         sortedData =
             sortedData.filter(
@@ -1799,14 +1905,35 @@ function sortStocks() {
                 }
             );
 
-    } else {
+
+        /*
+         * IMPORTANT:
+         *
+         * Favorites ALWAYS use
+         * Expected Dividend HIGH -> LOW.
+         *
+         * This intentionally ignores
+         * dividendAsc/dateAsc.
+         */
 
         sortedData.sort(
             function(a, b) {
 
-                /*
-                 * Date: Latest
-                 */
+                return sortByDividendHigh(
+                    a,
+                    b
+                );
+            }
+        );
+
+    } else {
+
+        /* =================================================
+           NORMAL SORTING
+           ================================================= */
+
+        sortedData.sort(
+            function(a, b) {
 
                 if (
                     currentSort ===
@@ -1820,10 +1947,6 @@ function sortStocks() {
                 }
 
 
-                /*
-                 * Dividend: High
-                 */
-
                 if (
                     currentSort ===
                     "dividendDesc"
@@ -1835,10 +1958,6 @@ function sortStocks() {
                     );
                 }
 
-
-                /*
-                 * Dividend: Low
-                 */
 
                 if (
                     currentSort ===
@@ -1852,11 +1971,6 @@ function sortStocks() {
                 }
 
 
-                /*
-                 * Default:
-                 * Dividend High
-                 */
-
                 return sortByDividendHigh(
                     a,
                     b
@@ -1866,9 +1980,20 @@ function sortStocks() {
     }
 
 
+    /*
+     * IMPORTANT:
+     *
+     * sortedData = COMPLETE list
+     * after filtering and sorting.
+     *
+     * renderStocks() is responsible for
+     * displaying only the current 50 records.
+     */
+
     renderStocks(
         sortedData,
-        currentInvestment
+        currentInvestment,
+        dividendData
     );
 
 
@@ -2078,24 +2203,8 @@ function updateSortMessage() {
         "dividendDesc"
     ) {
 
-        /*
-         * The meaning changes depending
-         * on whether investment exists.
-         */
-
-        if (
-            currentInvestment !== null &&
-            currentInvestment > 0
-        ) {
-
-            resultMessage.textContent =
-                "Sort by Expected Dividend: High to Low";
-
-        } else {
-
-            resultMessage.textContent =
-                "Sort by Expected Dividend: High to Low";
-        }
+        resultMessage.textContent =
+            "Sort by Expected Dividend: High to Low";
 
         return;
     }
@@ -2106,19 +2215,8 @@ function updateSortMessage() {
         "dividendAsc"
     ) {
 
-        if (
-            currentInvestment !== null &&
-            currentInvestment > 0
-        ) {
-
-            resultMessage.textContent =
-                "Sort by Expected Dividend: Low to High";
-
-        } else {
-
-            resultMessage.textContent =
-                "Sort by Expected Dividend: Low to High";
-        }
+        resultMessage.textContent =
+            "Sort by Expected Dividend: Low to High";
 
         return;
     }
@@ -2126,101 +2224,6 @@ function updateSortMessage() {
 
     resultMessage.textContent =
         "Sort by Expected Dividend: High to Low";
-}
-
-
-/* =========================================================
-   HIGHEST EXPECTED DIVIDEND
-   ========================================================= */
-
-function getHighestExpectedDividend(
-    data,
-    investment
-) {
-
-    if (
-        !Array.isArray(data) ||
-        data.length === 0 ||
-        investment === null ||
-        investment <= 0
-    ) {
-
-        return null;
-    }
-
-
-    let highestValue =
-        -1;
-
-
-    data.forEach(
-        function(stock) {
-
-            const price =
-                Number(
-                    stock.current_share_price
-                );
-
-
-            const dividend =
-                Number(
-                    stock.dividend_amount
-                );
-
-
-            if (
-                isNaN(price) ||
-                price <= 0 ||
-                isNaN(dividend) ||
-                dividend < 0
-            ) {
-
-                return;
-            }
-
-
-            const shares =
-                Math.floor(
-                    investment /
-                    price
-                );
-
-
-            /*
-             * Cannot afford even one share.
-             */
-
-            if (shares <= 0) {
-                return;
-            }
-
-
-            const expected =
-                shares *
-                dividend;
-
-
-            if (
-                expected >
-                highestValue
-            ) {
-
-                highestValue =
-                    expected;
-            }
-        }
-    );
-
-
-    if (
-        highestValue < 0
-    ) {
-
-        return null;
-    }
-
-
-    return highestValue;
 }
 
 
@@ -2509,11 +2512,6 @@ function toggleFavorite(
         );
 
 
-        /*
-         * Immediately refresh the Favorites
-         * list after removing a favorite.
-         */
-
         if (
             currentSort ===
             "favorites"
@@ -2588,407 +2586,6 @@ function toggleFavorite(
 
         },
         700
-    );
-}
-
-
-/* =========================================================
-   RENDER STOCKS
-   ========================================================= */
-
-function renderStocks(
-    data,
-    investment
-) {
-
-    stockList.innerHTML = "";
-
-
-    if (
-        !Array.isArray(data) ||
-        data.length === 0
-    ) {
-
-        empty.classList.remove(
-            "hidden"
-        );
-
-
-        if (
-            currentSort ===
-            "favorites"
-        ) {
-
-            resultMessage.textContent =
-                "No favorite companies selected.";
-
-        } else {
-
-            resultMessage.textContent =
-                "No dividends found for the selected dates.";
-        }
-
-
-        return;
-    }
-
-
-    empty.classList.add(
-        "hidden"
-    );
-
-
-    /*
-     * Find highest achievable expected dividend.
-     *
-     * Only stocks with at least one affordable share
-     * can become the highest expected dividend.
-     */
-
-    const highestExpectedDividend =
-        getHighestExpectedDividend(
-            data,
-            investment
-        );
-
-
-    data.forEach(
-        function(stock, index) {
-
-            const price =
-                Number(
-                    stock.current_share_price
-                );
-
-
-            const dividend =
-                Number(
-                    stock.dividend_amount
-                );
-
-
-            let shares = 1;
-
-
-            let expectedDividend =
-                isNaN(dividend)
-                    ? 0
-                    : dividend;
-
-
-            /*
-             * Investment entered.
-             */
-
-            if (
-                investment !== null &&
-                investment > 0 &&
-                !isNaN(price) &&
-                price > 0 &&
-                !isNaN(dividend) &&
-                dividend >= 0
-            ) {
-
-                shares =
-                    Math.floor(
-                        investment /
-                        price
-                    );
-
-
-                expectedDividend =
-                    shares *
-                    dividend;
-            }
-
-
-            const tomorrow =
-                isTomorrow(
-                    stock.ex_dividend_date
-                );
-
-
-            /*
-             * Highest expected dividend.
-             *
-             * Only mark if this stock is actually
-             * eligible for at least one share.
-             */
-
-            const isHighestExpectedDividend =
-                highestExpectedDividend !== null &&
-                shares > 0 &&
-                expectedDividend ===
-                    highestExpectedDividend;
-
-
-            const card =
-                document.createElement(
-                    "div"
-                );
-
-
-            /*
-             * Tomorrow and highest-dividend
-             * highlights can work together.
-             */
-
-            let cardClass =
-                "stock-card";
-
-
-            if (tomorrow) {
-
-                cardClass +=
-                    " tomorrow-card";
-            }
-
-
-            if (
-                isHighestExpectedDividend
-            ) {
-
-                cardClass +=
-                    " highest-dividend-card";
-            }
-
-
-            card.className =
-                cardClass;
-
-
-            card.style.animationDelay =
-                `${index * 0.06}s`;
-
-
-            const favoriteKey =
-                getFavoriteKey(stock);
-
-
-            const isFavorite =
-                favorites.has(
-                    favoriteKey
-                );
-
-
-            card.innerHTML = `
-
-                <button
-                    type="button"
-                    class="favorite-button ${
-                        isFavorite
-                            ? "is-favorite"
-                            : ""
-                    }"
-                    aria-label="${
-                        isFavorite
-                            ? "Remove favorite"
-                            : "Add favorite"
-                    }"
-                    title="${
-                        isFavorite
-                            ? "Remove favorite"
-                            : "Add favorite"
-                    }">
-
-                    ${
-                        isFavorite
-                            ? "★"
-                            : "☆"
-                    }
-
-                </button>
-
-
-                <div class="company-name">
-
-                    <span>
-
-                        ${
-                            stock.share_name ||
-                            "Unknown Company"
-                        }
-
-                    </span>
-
-                </div>
-
-
-                <div class="symbol">
-
-                    ${
-                        stock.symbol ||
-                        ""
-                    }
-
-                </div>
-
-
-                ${
-                    tomorrow
-                        ? `
-                            <div class="tomorrow-badge">
-
-                                💵 Last Chance for Dividend
-
-                            </div>
-                          `
-                        : ""
-                }
-
-
-                ${
-                    isHighestExpectedDividend
-                        ? `
-                            <div class="highest-dividend-badge">
-
-                                🏆 Highest Expected Dividend
-
-                            </div>
-                          `
-                        : ""
-                }
-
-
-                <div class="main-result">
-
-                    <div class="expected">
-
-                        <div class="expected-value">
-
-                            💰
-                            ${
-                                formatMoney(
-                                    expectedDividend
-                                )
-                            }
-
-                        </div>
-
-
-                        <div class="expected-label">
-
-                            Expected Dividend ·
-                            ${
-                                shares.toLocaleString(
-                                    "en-IN"
-                                )
-                            }
-                            ${
-                                shares === 1
-                                    ? "share"
-                                    : "shares"
-                            }
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="ex-date">
-
-                        <div class="ex-date-value">
-
-                            📅
-                            ${
-                                formatExDividendDate(
-                                    stock.ex_dividend_date
-                                )
-                            }
-
-                        </div>
-
-
-                        <div class="ex-date-label">
-
-                            Ex-Dividend Date
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-                <div class="metrics">
-
-                    <div class="metric">
-
-                        <div class="metric-value">
-
-                            💵
-                            ${
-                                formatMoney(
-                                    stock.dividend_amount
-                                )
-                            }
-
-                        </div>
-
-
-                        <div class="metric-label">
-
-                            Dividend / Share
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="metric">
-
-                        <div class="metric-value">
-
-                            📈
-                            ${
-                                formatMoney(
-                                    stock.current_share_price
-                                )
-                            }
-
-                        </div>
-
-
-                        <div class="metric-label">
-
-                            Current Price
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-            `;
-
-
-            const favoriteButton =
-                card.querySelector(
-                    ".favorite-button"
-                );
-
-
-            favoriteButton.addEventListener(
-                "click",
-                function(event) {
-
-                    event.preventDefault();
-
-                    event.stopPropagation();
-
-
-                    toggleFavorite(
-                        stock,
-                        favoriteButton
-                    );
-                }
-            );
-
-
-            stockList.appendChild(
-                card
-            );
-        }
     );
 }
 
@@ -3246,6 +2843,16 @@ async function refreshDividends() {
 
     try {
 
+        /*
+         * Pull-to-refresh remains a MANUAL refresh.
+         *
+         * It intentionally uses the existing search
+         * behavior, including its sorting reset.
+         *
+         * searchDividends() also resets pagination
+         * to page 1 because this is a fresh search.
+         */
+
         await searchDividends();
 
     } finally {
@@ -3285,6 +2892,3 @@ async function refreshDividends() {
    ========================================================= */
 
 searchDividends();
-
-
-// the above code refresh the page after 1 minute //
