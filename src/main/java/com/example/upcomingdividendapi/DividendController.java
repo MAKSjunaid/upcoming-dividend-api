@@ -15,6 +15,33 @@ public class DividendController {
         this.dividendService = dividendService;
     }
 
+    /**
+     * Lightweight endpoint used by the frontend to check
+     * whether the dividend data has changed.
+     *
+     * The frontend can call this every 1 minute without
+     * downloading the complete dividend data.
+     */
+    @GetMapping("/version")
+    public ResponseEntity<?> getVersion() {
+
+        try {
+            String version = dividendService.getCacheVersion();
+
+            return ResponseEntity.ok(
+                    new VersionResponse(version)
+            );
+
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(e.getMessage());
+        }
+    }
+
+    /**
+     * Existing endpoint for fetching the actual
+     * upcoming dividend data.
+     */
     @PostMapping
     public ResponseEntity<?> getUpcomingDividends(
             @RequestBody(required = false) DividendRequest request) {
@@ -30,6 +57,22 @@ public class DividendController {
 
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(e.getMessage());
+        }
+    }
+
+    /**
+     * Response object for the version endpoint.
+     */
+    public static class VersionResponse {
+
+        private final String version;
+
+        public VersionResponse(String version) {
+            this.version = version;
+        }
+
+        public String getVersion() {
+            return version;
         }
     }
 }
