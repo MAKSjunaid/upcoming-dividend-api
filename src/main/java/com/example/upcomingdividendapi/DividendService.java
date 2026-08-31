@@ -77,7 +77,7 @@ public class DividendService {
      * Only dividend shares whose ex-date is from tomorrow
      * through the next 30 days are normally refreshed.
      */
-    private static final int ACTIVE_PRICE_WINDOW_DAYS = 30;
+    private static final int ACTIVE_PRICE_WINDOW_DAYS = 15;
 
     /*
      * Yahoo price refresh interval.
