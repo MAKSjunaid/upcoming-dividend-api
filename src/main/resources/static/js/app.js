@@ -106,7 +106,7 @@ let currentPage = 1;
    ========================================================= */
 
 const AUTO_REFRESH_INTERVAL =
-    60 * 1000;
+    30 * 1000;
 
 let autoRefreshTimer = null;
 
