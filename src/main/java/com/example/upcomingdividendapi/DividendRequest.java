@@ -2,63 +2,27 @@ package com.example.upcomingdividendapi;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-public class DividendResponse {
+public class DividendRequest {
 
-    @JsonProperty("share_name")
-    private String shareName;
+    @JsonProperty("from_date")
+    private String fromDate;
 
-    @JsonProperty("symbol")
-    private String symbol;
+    @JsonProperty("to_date")
+    private String toDate;
 
-    @JsonProperty("ex_dividend_date")
-    private String exDate;
-
-    @JsonProperty("dividend_amount")
-    private Double dividendAmount;
-
-    @JsonProperty("current_share_price")
-    private Double currentSharePrice;
-
-    @JsonProperty("previous_share_price")
-    private Double previousSharePrice;
-
-    public DividendResponse(
-            String shareName,
-            String symbol,
-            String exDate,
-            Double dividendAmount,
-            Double currentSharePrice,
-            Double previousSharePrice) {
-
-        this.shareName = shareName;
-        this.symbol = symbol;
-        this.exDate = exDate;
-        this.dividendAmount = dividendAmount;
-        this.currentSharePrice = currentSharePrice;
-        this.previousSharePrice = previousSharePrice;
+    public String getFromDate() {
+        return fromDate;
     }
 
-    public String getShareName() {
-        return shareName;
+    public void setFromDate(String fromDate) {
+        this.fromDate = fromDate;
     }
 
-    public String getSymbol() {
-        return symbol;
+    public String getToDate() {
+        return toDate;
     }
 
-    public String getExDate() {
-        return exDate;
-    }
-
-    public Double getDividendAmount() {
-        return dividendAmount;
-    }
-
-    public Double getCurrentSharePrice() {
-        return currentSharePrice;
-    }
-
-    public Double getPreviousSharePrice() {
-        return previousSharePrice;
+    public void setToDate(String toDate) {
+        this.toDate = toDate;
     }
 }
