@@ -1,1 +1,30 @@
 
+{
+  "version": 4,
+  "lastUpdated": "2026-09-01T15:10:37.457",
+  "lastDividendApiRefresh": "2026-09-01T15:09:45.061",
+  "dividends": [
+    {
+      "shareName": "Suprajit Engineering Limited",
+      "symbol": "SUPRAJIT",
+      "exDate": "01-Sep-2026",
+      "dividendDetails": "Dividend - Rs 2 Per Share",
+      "dividendAmount": "2",
+      "currentSharePrice": "121.50",
+      "chartPreviousClose": "505.25",
+      "source": "NSE",
+      "lastYahooAttempt": "2026-08-31T15:31:47.231"
+    },
+    {
+      "shareName": "Taj GVK Hotels \u0026 Resorts Limited",
+      "symbol": "TAJGVK",
+      "exDate": "01-Sep-2026",
+      "dividendDetails": "Dividend - Rs 2 Per Share",
+      "dividendAmount": "2",
+      "currentSharePrice": "335.65",
+      "chartPreviousClose": "340.00",
+      "source": "NSE",
+      "lastYahooAttempt": "2026-08-31T15:31:47.231"
+    }
+  ]
+}
