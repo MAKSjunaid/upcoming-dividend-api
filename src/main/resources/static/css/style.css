@@ -289,7 +289,7 @@ body {
 
     color: #172033;
 
-    font-size: 16px;
+    font-size: 15px;
 
     font-family: inherit;
 
@@ -1535,6 +1535,245 @@ body {
 
 
 /* =========================================================
+   STOCK PERFORMANCE
+   ========================================================= */
+
+/*
+ * IMPORTANT
+ *
+ * The close animation is intentionally based on
+ * max-height instead of opacity + transform.
+ *
+ * The performance data remains visible while
+ * the panel physically collapses.
+ *
+ * This prevents the performance section from
+ * disappearing first and then moving upward.
+ *
+ * The animation is slightly slower at 0.32s so
+ * both minimize and maximize feel smoother.
+ */
+
+
+/* =========================================================
+   STOCK DETAILS PANEL
+   ========================================================= */
+
+.stock-details-panel {
+
+    width: 100%;
+
+    margin-top: 8px;
+
+    padding-top: 8px;
+
+    padding-bottom: 2px;
+
+    max-height: 70px;
+
+    overflow: hidden;
+
+    opacity: 1;
+
+    transform: none;
+
+    /*
+     * Slightly slower smooth animation.
+     */
+
+    transition:
+        max-height 0.22s ease;
+}
+
+
+/* =========================================================
+   OPEN STATE
+   ========================================================= */
+
+.stock-details-panel.open {
+
+    max-height: 70px;
+
+    opacity: 1;
+
+    transform: none;
+}
+
+
+/* =========================================================
+   CLOSING STATE
+   ========================================================= */
+
+.stock-details-panel:not(.open) {
+
+    max-height: 0;
+
+    opacity: 1;
+
+    transform: none;
+
+    margin-top: 0;
+
+    padding-top: 0;
+
+    padding-bottom: 0;
+}
+
+
+/* =========================================================
+   STOCK PERFORMANCE TITLE
+   ========================================================= */
+
+.stock-performance-title {
+
+    margin: 1px 2px 7px;
+
+    color: #8992a3;
+
+    font-size: 11px;
+
+    font-weight: 700;
+
+    line-height: 1.2;
+
+    letter-spacing: 0.15px;
+}
+
+
+/* =========================================================
+   PERIOD CONTAINER
+   ========================================================= */
+
+.stock-details-periods {
+
+    width: 100%;
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(7, minmax(0, 1fr));
+
+    gap: 4px;
+
+    align-items: stretch;
+}
+
+
+/* =========================================================
+   PERIOD BOX
+   ========================================================= */
+
+.stock-period-box {
+
+    min-width: 0;
+
+    height: 34px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 1px;
+
+    padding: 0 2px;
+
+    border-radius: 9px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.96),
+            rgba(247, 248, 250, 0.92)
+        );
+
+    border: 1px solid #edf0f4;
+
+    box-shadow:
+        0 2px 7px rgba(25, 35, 55, 0.035);
+
+    overflow: hidden;
+
+    white-space: nowrap;
+}
+
+
+/* =========================================================
+   PERIOD LABEL
+   ========================================================= */
+
+.stock-period-label {
+
+    flex-shrink: 0;
+
+    color: #8992a3;
+
+    font-size: 8px;
+
+    font-weight: 700;
+
+    line-height: 1;
+
+    white-space: nowrap;
+}
+
+
+/* =========================================================
+   PERIOD VALUE
+   ========================================================= */
+
+.stock-period-value {
+
+    min-width: 0;
+
+    color: #8992a3;
+
+    font-size: 8px; /* FROMMMM 8 */
+
+    font-weight: 700;
+
+    line-height: 1;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+}
+
+
+/* =========================================================
+   POSITIVE
+   ========================================================= */
+
+.stock-period-value.positive {
+
+    color: #249653;
+}
+
+
+/* =========================================================
+   NEGATIVE
+   ========================================================= */
+
+.stock-period-value.negative {
+
+    color: #d34b4b;
+}
+
+
+/* =========================================================
+   NEUTRAL
+   ========================================================= */
+
+.stock-period-value.neutral {
+
+    color: #8992a3;
+}
+
+
+/* =========================================================
    LOADING / EMPTY
    ========================================================= */
 
@@ -1829,6 +2068,94 @@ body {
         font-size: 8px;
     }
 
+
+    /* =====================================================
+       MOBILE STOCK PERFORMANCE
+       ===================================================== */
+
+    .stock-details-panel {
+
+        margin-top: 7px;
+
+        padding-top: 7px;
+
+        padding-bottom: 1px;
+
+        max-height: 65px;
+
+        /*
+         * Same slightly slower animation on mobile.
+         */
+
+        transition:
+            max-height 0.22s ease;
+    }
+
+
+    .stock-details-panel.open {
+
+        max-height: 65px;
+    }
+
+
+    .stock-details-panel:not(.open) {
+
+        max-height: 0;
+
+        margin-top: 0;
+
+        padding-top: 0;
+
+        padding-bottom: 0;
+    }
+
+
+    .stock-performance-title {
+
+        margin-left: 2px;
+
+        margin-bottom: 6px;
+
+        font-size: 11px;
+
+        font-weight: 700;
+    }
+
+
+    .stock-details-periods {
+
+        gap: 3px;
+    }
+
+
+    .stock-period-box {
+
+        height: 32px;
+
+        padding-left: 1px;
+
+        padding-right: 1px;
+
+        border-radius: 8px;
+    }
+
+
+    .stock-period-label {
+
+        font-size: 7px;
+
+        font-weight: 700;
+    }
+
+
+    .stock-period-value {
+
+        font-size: 7px;
+
+        font-weight: 700;
+    }
+
+
     .loading {
         min-height: 320px;
         margin-left: 11px;
@@ -1898,6 +2225,28 @@ body {
         width: 280px;
         height: 280px;
     }
+
+
+    .stock-period-box {
+
+        height: 35px;
+
+        padding-left: 3px;
+
+        padding-right: 3px;
+    }
+
+
+    .stock-period-label {
+
+        font-size: 8px;
+    }
+
+
+    .stock-period-value {
+
+        font-size: 8px;
+    }
 }
 
 
@@ -1936,5 +2285,11 @@ body {
     }
 }
 
+.stock-period-value {
+    font-size: 9px !important;
+}
 
-/* final with pagination */
+/* =========================================================
+   FINAL esssssssssss <!--/* 30TH AUG FINAL */-->
+
+   ========================================================= */
