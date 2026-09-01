@@ -32,6 +32,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -44,11 +46,71 @@ public class DividendService {
     // ============================================================
 
     /*
-     * Number of parallel Yahoo requests.
+     * ============================================================
+     * YAHOO THREAD COUNT
+     * ============================================================
      *
-     * Yahoo is called once per symbol.
+     * This is the MAXIMUM number of Yahoo requests that can
+     * execute at the same time.
+     *
+     * Even if there are 400+ shares, Render will NOT create
+     * 400 threads.
+     *
+     * Example:
+     *
+     * 425 shares
+     *      |
+     *      +---- Batch 1 = 85 shares
+     *      +---- Batch 2 = 85 shares
+     *      +---- Batch 3 = 85 shares
+     *      +---- Batch 4 = 85 shares
+     *      +---- Batch 5 = 85 shares
+     *
+     * Inside the batches:
+     *
+     * Maximum 8 Yahoo calls at one time.
      */
     private static final int THREAD_COUNT = 8;
+
+    /*
+     * ============================================================
+     * NUMBER OF YAHOO BATCHES
+     * ============================================================
+     *
+     * The system automatically divides the eligible shares into
+     * this many batches.
+     *
+     * 400 shares -> 5 batches
+     * 425 shares -> 5 batches
+     * 500 shares -> 5 batches
+     *
+     * If there are fewer shares, fewer actual batches may be used.
+     */
+    private static final int YAHOO_BATCH_COUNT = 5;
+
+    /*
+     * ============================================================
+     * BATCH START DELAYS
+     * ============================================================
+     *
+     * Batch 1 starts 30 seconds after the API request.
+     * Batch 2 starts 40 seconds after the API request.
+     * Batch 3 starts 50 seconds after the API request.
+     * Batch 4 starts 60 seconds after the API request.
+     * Batch 5 starts 70 seconds after the API request.
+     *
+     * These delays are intentionally spread out to reduce
+     * memory usage and Yahoo pressure on Render.
+     */
+    private static final int YAHOO_BATCH_1_DELAY_SECONDS = 30;
+
+    private static final int YAHOO_BATCH_2_DELAY_SECONDS = 40;
+
+    private static final int YAHOO_BATCH_3_DELAY_SECONDS = 50;
+
+    private static final int YAHOO_BATCH_4_DELAY_SECONDS = 60;
+
+    private static final int YAHOO_BATCH_5_DELAY_SECONDS = 70;
 
     /*
      * HTTP connection timeout.
@@ -77,7 +139,7 @@ public class DividendService {
      * Only dividend shares whose ex-date is from tomorrow
      * through the next 30 days are normally refreshed.
      */
-    private static final int ACTIVE_PRICE_WINDOW_DAYS = 15;
+    private static final int ACTIVE_PRICE_WINDOW_DAYS = 30;
 
     /*
      * Yahoo price refresh interval.
@@ -98,7 +160,7 @@ public class DividendService {
      * NOTE:
      * This is currently 1 minute for testing.
      */
-    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 1;
+    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 60;
 
     /*
      * If Yahoo cannot find a symbol, don't retry it on every
@@ -138,6 +200,52 @@ public class DividendService {
     private static final AtomicBoolean
             BACKGROUND_REFRESH_RUNNING =
             new AtomicBoolean(false);
+
+    /*
+     * ============================================================
+     * YAHOO BATCH REFRESH CONTROL
+     * ============================================================
+     *
+     * Prevents multiple 5-batch Yahoo refresh cycles from being
+     * scheduled at the same time.
+     *
+     * This is VERY important because the frontend may call
+     * /api/dividends repeatedly.
+     */
+    private static final AtomicBoolean
+            YAHOO_BATCH_REFRESH_RUNNING =
+            new AtomicBoolean(false);
+
+    /*
+     * ============================================================
+     * SHARED YAHOO EXECUTOR
+     * ============================================================
+     *
+     * IMPORTANT:
+     *
+     * We create this ONLY ONCE.
+     *
+     * We do NOT create a new ExecutorService every time
+     * /api/dividends is called.
+     *
+     * Maximum 8 Yahoo requests can run at once.
+     */
+    private static final ExecutorService YAHOO_EXECUTOR =
+            Executors.newFixedThreadPool(
+                    THREAD_COUNT
+            );
+
+    /*
+     * ============================================================
+     * SHARED YAHOO BATCH SCHEDULER
+     * ============================================================
+     *
+     * Only one scheduler thread is needed because its job is
+     * simply to start the Yahoo batches at the correct times.
+     */
+    private static final ScheduledExecutorService
+            YAHOO_BATCH_SCHEDULER =
+            Executors.newSingleThreadScheduledExecutor();
 
     /*
      * Gson used for reading/writing cache JSON.
@@ -383,9 +491,6 @@ public class DividendService {
          * This allows old mock records to be automatically
          * removed from dividend-cache.json after MockData.java
          * is cleared.
-         *
-         * If MOCK records are removed, cacheChanged becomes true.
-         * Later saveCache(cache, true) will increment the version.
          */
 
         if (MockData.hasMockData()) {
@@ -440,14 +545,6 @@ public class DividendService {
         // 11. SAVE CACHE AFTER SYNCHRONOUS DIVIDEND PROCESSING
         // ========================================================
 
-        /*
-         * IMPORTANT:
-         *
-         * cacheChanged means the actual frontend-visible
-         * dividend data changed.
-         *
-         * Therefore saveCache(..., true) increments the version.
-         */
         if (cacheChanged) {
 
             saveCache(
@@ -479,11 +576,37 @@ public class DividendService {
         // 14. PRICE UPDATE LOGIC
         // ========================================================
 
-        boolean priceChanged = false;
-
-        // ========================================================
-        // NORMAL ACTIVE-WINDOW PRICE REFRESH
-        // ========================================================
+        /*
+         * ========================================================
+         * IMPORTANT CHANGE
+         * ========================================================
+         *
+         * Previously:
+         *
+         * /api/dividends
+         *      |
+         *      +--> Yahoo 400+ shares
+         *      |
+         *      +--> WAIT
+         *      |
+         *      +--> return response
+         *
+         * That could make the API take 3-10+ seconds.
+         *
+         * NOW:
+         *
+         * /api/dividends
+         *      |
+         *      +--> read cache
+         *      |
+         *      +--> schedule Yahoo batches
+         *      |
+         *      +--> return cached response
+         *
+         * Yahoo runs AFTER the API response.
+         *
+         * This is the main performance improvement.
+         */
 
         if (tradingHours) {
 
@@ -492,27 +615,13 @@ public class DividendService {
             );
 
             System.out.println(
-                    "Checking cached prices for active 30-day window..."
+                    "Yahoo price refresh will run in background batches."
             );
 
-            List<DividendData> sharesForPriceRefresh =
-                    getSharesForActivePriceRefresh(
-                            cache.dividends,
-                            today
-                    );
-
-            if (!sharesForPriceRefresh.isEmpty()) {
-
-                boolean changed =
-                        fetchYahooPricesInParallel(
-                                sharesForPriceRefresh
-                        );
-
-                if (changed) {
-
-                    priceChanged = true;
-                }
-            }
+            startBackgroundYahooBatchRefreshIfNeeded(
+                    cache.dividends,
+                    today
+            );
 
         } else {
 
@@ -524,6 +633,13 @@ public class DividendService {
                     "Existing cached prices will be reused."
             );
 
+            /*
+             * Outside trading hours we still need to support
+             * newly discovered shares that have no price.
+             *
+             * Instead of waiting for Yahoo, these are also
+             * processed in the background.
+             */
             List<DividendData> sharesWithoutPrice =
                     getSharesWithoutPrice(
                             requestedShares
@@ -537,38 +653,25 @@ public class DividendService {
                                 + " share(s) without cached price."
                 );
 
-                boolean changed =
-                        fetchYahooPricesInParallel(
-                                sharesWithoutPrice
-                        );
-
-                if (changed) {
-
-                    priceChanged = true;
-                }
+                startBackgroundYahooBatchRefreshForList(
+                        sharesWithoutPrice
+                );
             }
         }
 
         // ========================================================
-        // 15. SAVE UPDATED PRICE DATA
+        // 15. READ REQUEST DATA FROM CACHE
         // ========================================================
 
         /*
-         * Yahoo price changes are frontend-visible changes.
+         * We intentionally DO NOT wait for Yahoo here.
          *
-         * Therefore the version must also increment here.
+         * The current cached price is returned immediately.
+         *
+         * Once background Yahoo batches finish, the cache is
+         * updated and the frontend version endpoint can detect
+         * the change.
          */
-        if (priceChanged) {
-
-            saveCache(
-                    cache,
-                    true
-            );
-        }
-
-        // ========================================================
-        // 16. READ REQUEST DATA AGAIN FROM CACHE
-        // ========================================================
 
         requestedShares =
                 getSharesForRequestedDateRange(
@@ -578,7 +681,7 @@ public class DividendService {
                 );
 
         // ========================================================
-        // 17. REMOVE INVALID NORMAL RECORDS
+        // 16. REMOVE INVALID NORMAL RECORDS
         // ========================================================
 
         requestedShares.removeIf(
@@ -606,7 +709,7 @@ public class DividendService {
         );
 
         // ========================================================
-        // 18. CREATE RESPONSE
+        // 17. CREATE RESPONSE
         // ========================================================
 
         List<DividendResponse> response =
@@ -674,28 +777,6 @@ public class DividendService {
     // REMOVE CACHED MOCK RECORDS
     // ============================================================
 
-    /*
-     * Removes all previously cached records whose source is MOCK.
-     *
-     * This is intentionally separate from removeExpiredCacheRecords().
-     *
-     * A MOCK record should be removed when MockData.java no longer
-     * contains mock data, even if its ex-date is still in the future.
-     *
-     * Example:
-     *
-     * Old MockData:
-     *
-     *     TIM
-     *     31-Aug-2026
-     *
-     * Current date:
-     *
-     *     29-Aug-2026
-     *
-     * The record is NOT expired yet, but it should still be removed
-     * because MockData has been cleared.
-     */
     private boolean removeCachedMockRecords(
             CacheFile cache
     ) {
@@ -761,23 +842,6 @@ public class DividendService {
     // CACHE VERSION
     // ============================================================
 
-    /**
-     * Returns the current cache version.
-     *
-     * This method is intentionally lightweight.
-     *
-     * It only reads the version from dividend-cache.json.
-     *
-     * It does NOT:
-     * - call NSE
-     * - call Groww
-     * - call Yahoo
-     * - refresh dividend data
-     * - refresh prices
-     * - modify the cache
-     *
-     * The frontend can safely call this every 1 minute.
-     */
     public String getCacheVersion() {
 
         CacheFile cache =
@@ -834,14 +898,9 @@ public class DividendService {
         /*
          * Mark the API refresh attempt immediately.
          *
-         * IMPORTANT:
-         *
          * This changes only cache metadata.
          *
          * Therefore saveCache(..., false) is used.
-         *
-         * The frontend version does NOT change merely because
-         * NSE/Groww was checked.
          */
         synchronized (CACHE_LOCK) {
 
@@ -998,16 +1057,6 @@ public class DividendService {
                 continue;
             }
 
-            /*
-             * Check whether the record already existed BEFORE
-             * merging it.
-             *
-             * This allows us to distinguish:
-             *
-             * new dividend
-             * vs
-             * updated existing dividend.
-             */
             DividendData existingBeforeMerge =
                     findCachedDividend(
                             cache,
@@ -1051,11 +1100,6 @@ public class DividendService {
 
         if (cacheChanged) {
 
-            /*
-             * Dividend data changed.
-             *
-             * Therefore increment the version.
-             */
             saveCache(
                     cache,
                     true
@@ -1073,93 +1117,552 @@ public class DividendService {
                             + newlyAddedDividends.size()
             );
 
-            if (isTradingHours()) {
-
-                /*
-                 * During trading hours the normal price refresh
-                 * will handle active shares.
-                 */
-                System.out.println(
-                        "Trading hours active. Normal Yahoo refresh will handle prices."
-                );
-
-            } else {
-
-                /*
-                 * Outside trading hours:
-                 *
-                 * Only new shares without a cached price are
-                 * sent to Yahoo.
-                 */
-                List<DividendData> newSharesWithoutPrice =
-                        new ArrayList<>();
-
-                for (DividendData share :
-                        newlyAddedDividends) {
-
-                    if (share == null
-                            || isEmpty(
-                            share.symbol
-                    )) {
-
-                        continue;
-                    }
-
-                    if ("MOCK".equalsIgnoreCase(
-                            share.source
-                    )) {
-
-                        continue;
-                    }
-
-                    if (isEmpty(
-                            share.currentSharePrice
-                    )
-                            || "N/A".equalsIgnoreCase(
-                            share.currentSharePrice
-                    )) {
-
-                        newSharesWithoutPrice.add(
-                                share
-                        );
-                    }
-                }
-
-                if (!newSharesWithoutPrice.isEmpty()) {
-
-                    System.out.println(
-                            "Outside trading hours."
-                    );
-
-                    System.out.println(
-                            "Yahoo will be called only for newly discovered shares without price."
-                    );
-
-                    boolean priceChanged =
-                            fetchYahooPricesInParallel(
-                                    newSharesWithoutPrice
-                            );
-
-                    if (priceChanged) {
-
-                        /*
-                         * Yahoo price changed.
-                         *
-                         * Increment version because the frontend
-                         * consumes the current price.
-                         */
-                        saveCache(
-                                cache,
-                                true
-                        );
-                    }
-                }
-            }
+            /*
+             * Do NOT wait for Yahoo here.
+             *
+             * Newly discovered shares are added to the normal
+             * background Yahoo batching system.
+             */
+            startBackgroundYahooBatchRefreshForList(
+                    newlyAddedDividends
+            );
         }
 
         System.out.println(
                 "Background dividend refresh completed."
         );
+
+        System.out.println(
+                "------------------------------------------------"
+        );
+    }
+
+    // ============================================================
+    // START YAHOO BACKGROUND BATCH REFRESH
+    // ============================================================
+
+    private void startBackgroundYahooBatchRefreshIfNeeded(
+            List<DividendData> allShares,
+            LocalDate today
+    ) {
+
+        if (allShares == null
+                || allShares.isEmpty()) {
+
+            return;
+        }
+
+        List<DividendData> eligibleShares =
+                getSharesForActivePriceRefresh(
+                        allShares,
+                        today
+                );
+
+        if (eligibleShares.isEmpty()) {
+
+            System.out.println(
+                    "No Yahoo price refresh is currently required."
+            );
+
+            return;
+        }
+
+        startBackgroundYahooBatchRefreshForList(
+                eligibleShares
+        );
+    }
+
+    // ============================================================
+    // START YAHOO BATCH REFRESH FOR LIST
+    // ============================================================
+
+    private void startBackgroundYahooBatchRefreshForList(
+            List<DividendData> shares
+    ) {
+
+        if (shares == null
+                || shares.isEmpty()) {
+
+            return;
+        }
+
+        /*
+         * Prevent another 5-batch cycle from being created while
+         * the current cycle is still running.
+         *
+         * This is important because the frontend may call
+         * /api/dividends every minute.
+         */
+        if (!YAHOO_BATCH_REFRESH_RUNNING.compareAndSet(
+                false,
+                true
+        )) {
+
+            System.out.println(
+                    "Yahoo batch refresh is already scheduled/running."
+            );
+
+            return;
+        }
+
+        /*
+         * Re-load the cache before creating the batch list.
+         *
+         * This ensures that we work with the newest cached data.
+         */
+        CacheFile latestCache =
+                loadCache();
+
+        List<DividendData> freshEligibleShares =
+                new ArrayList<>();
+
+        /*
+         * Re-map the supplied symbols to the latest cache
+         * objects.
+         *
+         * This avoids using stale object references when the
+         * cache has been changed by another background operation.
+         */
+        for (DividendData supplied :
+                shares) {
+
+            if (supplied == null
+                    || isEmpty(supplied.symbol)) {
+
+                continue;
+            }
+
+            DividendData latest =
+                    findCachedDividend(
+                            latestCache,
+                            supplied
+                    );
+
+            if (latest == null) {
+
+                continue;
+            }
+
+            if (!shouldAttemptYahoo(
+                    latest
+            )) {
+
+                continue;
+            }
+
+            if ("MOCK".equalsIgnoreCase(
+                    latest.source
+            )) {
+
+                continue;
+            }
+
+            freshEligibleShares.add(
+                    latest
+            );
+        }
+
+        if (freshEligibleShares.isEmpty()) {
+
+            YAHOO_BATCH_REFRESH_RUNNING.set(
+                    false
+            );
+
+            return;
+        }
+
+        /*
+         * Divide the list into up to 5 batches.
+         */
+        List<List<DividendData>> batches =
+                createYahooBatches(
+                        freshEligibleShares
+                );
+
+        System.out.println(
+                "================================================"
+        );
+
+        System.out.println(
+                "Yahoo background batch refresh scheduled."
+        );
+
+        System.out.println(
+                "Total Yahoo shares: "
+                        + freshEligibleShares.size()
+        );
+
+        System.out.println(
+                "Total batches: "
+                        + batches.size()
+        );
+
+        for (int i = 0;
+             i < batches.size();
+             i++) {
+
+            System.out.println(
+                    "Batch "
+                            + (i + 1)
+                            + " size: "
+                            + batches.get(i).size()
+            );
+        }
+
+        System.out.println(
+                "================================================"
+        );
+
+        scheduleYahooBatches(
+                batches
+        );
+    }
+
+    // ============================================================
+    // CREATE YAHOO BATCHES
+    // ============================================================
+
+    private List<List<DividendData>>
+    createYahooBatches(
+            List<DividendData> shares
+    ) {
+
+        List<List<DividendData>> batches =
+                new ArrayList<>();
+
+        if (shares == null
+                || shares.isEmpty()) {
+
+            return batches;
+        }
+
+        /*
+         * We don't create 5 empty batches.
+         *
+         * Example:
+         *
+         * 20 shares -> 5 batches
+         * each approximately 4
+         *
+         * 2 shares -> only 2 batches.
+         */
+        int actualBatchCount =
+                Math.min(
+                        YAHOO_BATCH_COUNT,
+                        shares.size()
+                );
+
+        int batchSize =
+                (int) Math.ceil(
+                        (double) shares.size()
+                                / actualBatchCount
+                );
+
+        for (int start = 0;
+             start < shares.size();
+             start += batchSize) {
+
+            int end =
+                    Math.min(
+                            start + batchSize,
+                            shares.size()
+                    );
+
+            List<DividendData> batch =
+                    new ArrayList<>(
+                            shares.subList(
+                                    start,
+                                    end
+                            )
+                    );
+
+            batches.add(
+                    batch
+            );
+        }
+
+        return batches;
+    }
+
+    // ============================================================
+    // SCHEDULE YAHOO BATCHES
+    // ============================================================
+
+    private void scheduleYahooBatches(
+            List<List<DividendData>> batches
+    ) {
+
+        if (batches == null
+                || batches.isEmpty()) {
+
+            YAHOO_BATCH_REFRESH_RUNNING.set(
+                    false
+            );
+
+            return;
+        }
+
+        /*
+         * Delay values for the 5 batches.
+         */
+        int[] delays = {
+                YAHOO_BATCH_1_DELAY_SECONDS,
+                YAHOO_BATCH_2_DELAY_SECONDS,
+                YAHOO_BATCH_3_DELAY_SECONDS,
+                YAHOO_BATCH_4_DELAY_SECONDS,
+                YAHOO_BATCH_5_DELAY_SECONDS
+        };
+
+        for (int i = 0;
+             i < batches.size();
+             i++) {
+
+            final int batchNumber =
+                    i + 1;
+
+            final List<DividendData> batch =
+                    batches.get(i);
+
+            int delaySeconds =
+                    delays[
+                            Math.min(
+                                    i,
+                                    delays.length - 1
+                            )
+                            ];
+
+            System.out.println(
+                    "Scheduling Yahoo Batch "
+                            + batchNumber
+                            + " after "
+                            + delaySeconds
+                            + " seconds."
+            );
+
+            YAHOO_BATCH_SCHEDULER.schedule(
+                    () -> {
+
+                        try {
+
+                            processYahooBatch(
+                                    batchNumber,
+                                    batch
+                            );
+
+                        } catch (Exception e) {
+
+                            System.out.println(
+                                    "Yahoo Batch "
+                                            + batchNumber
+                                            + " failed: "
+                                            + e.getMessage()
+                            );
+
+                        } finally {
+
+                            /*
+                             * The final batch marks the entire
+                             * refresh cycle as complete.
+                             */
+                            if (batchNumber
+                                    == batches.size()) {
+
+                                YAHOO_BATCH_REFRESH_RUNNING.set(
+                                        false
+                                );
+
+                                System.out.println(
+                                        "================================================"
+                                );
+
+                                System.out.println(
+                                        "Yahoo background batch refresh completed."
+                                );
+
+                                System.out.println(
+                                        "================================================"
+                                );
+                            }
+                        }
+
+                    },
+                    delaySeconds,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    // ============================================================
+    // PROCESS ONE YAHOO BATCH
+    // ============================================================
+
+    private void processYahooBatch(
+            int batchNumber,
+            List<DividendData> batch
+    ) {
+
+        if (batch == null
+                || batch.isEmpty()) {
+
+            System.out.println(
+                    "Yahoo Batch "
+                            + batchNumber
+                            + " is empty."
+            );
+
+            return;
+        }
+
+        System.out.println(
+                "------------------------------------------------"
+        );
+
+        System.out.println(
+                "Yahoo Batch "
+                        + batchNumber
+                        + " started."
+        );
+
+        System.out.println(
+                "Batch size: "
+                        + batch.size()
+        );
+
+        System.out.println(
+                "Start time: "
+                        + LocalDateTime.now(
+                        INDIA_ZONE
+                )
+        );
+
+        /*
+         * Re-check the cache before processing.
+         *
+         * Some shares may have already been updated by another
+         * operation while the batch was waiting for its delay.
+         */
+        CacheFile latestCache =
+                loadCache();
+
+        List<DividendData> validBatch =
+                new ArrayList<>();
+
+        for (DividendData supplied :
+                batch) {
+
+            if (supplied == null
+                    || isEmpty(supplied.symbol)) {
+
+                continue;
+            }
+
+            DividendData latest =
+                    findCachedDividend(
+                            latestCache,
+                            supplied
+                    );
+
+            if (latest == null) {
+
+                continue;
+            }
+
+            if (!shouldAttemptYahoo(
+                    latest
+            )) {
+
+                continue;
+            }
+
+            if ("MOCK".equalsIgnoreCase(
+                    latest.source
+            )) {
+
+                continue;
+            }
+
+            validBatch.add(
+                    latest
+            );
+        }
+
+        if (validBatch.isEmpty()) {
+
+            System.out.println(
+                    "Yahoo Batch "
+                            + batchNumber
+                            + " has no shares requiring refresh."
+            );
+
+            System.out.println(
+                    "------------------------------------------------"
+            );
+
+            return;
+        }
+
+        /*
+         * Send this batch to Yahoo.
+         *
+         * IMPORTANT:
+         *
+         * fetchYahooPricesInParallel() now uses the SHARED
+         * executor instead of creating a new executor.
+         */
+        boolean priceChanged =
+                fetchYahooPricesInParallel(
+                        validBatch
+                );
+
+        /*
+         * Save ONCE after the entire batch finishes.
+         *
+         * This is much better for Render memory and disk usage.
+         */
+        if (priceChanged) {
+
+            CacheFile cacheAfterYahoo =
+                    loadCache();
+
+            /*
+             * The objects inside validBatch are from the cache
+             * object loaded above. Save that same object if
+             * possible.
+             *
+             * Because fetchYahooPricesInParallel modified these
+             * objects directly, they contain the new prices.
+             */
+            saveCache(
+                    latestCache,
+                    true
+            );
+
+            System.out.println(
+                    "Yahoo Batch "
+                            + batchNumber
+                            + " changed frontend-visible data."
+            );
+
+        } else {
+
+            System.out.println(
+                    "Yahoo Batch "
+                            + batchNumber
+                            + " did not change frontend-visible data."
+            );
+        }
+
+        System.out.println(
+                "Yahoo Batch "
+                        + batchNumber
+                        + " completed."
+        );
+
+        System.out.println(
+                "End time: "
+                        + LocalDateTime.now(
+                        INDIA_ZONE
+                ));
 
         System.out.println(
                 "------------------------------------------------"
@@ -1355,14 +1858,7 @@ public class DividendService {
                 }
 
                 /*
-                 * Backward compatibility:
-                 *
-                 * Older dividend-cache.json files do not have
-                 * a version field.
-                 *
-                 * Gson therefore gives version = 0.
-                 *
-                 * We treat those files as version 1.
+                 * Backward compatibility.
                  */
                 if (cache.version <= 0) {
 
@@ -1387,12 +1883,6 @@ public class DividendService {
     // SAVE CACHE
     // ============================================================
 
-    /**
-     * Saves the cache.
-     *
-     * @param cache cache object
-     * @param dataChanged true when frontend-visible data changed
-     */
     private void saveCache(
             CacheFile cache,
             boolean dataChanged
@@ -1418,16 +1908,6 @@ public class DividendService {
                 /*
                  * Only increment the version when actual
                  * frontend-visible data has changed.
-                 *
-                 * Examples:
-                 *
-                 * - new dividend
-                 * - dividend amount changed
-                 * - expired dividend removed
-                 * - current price changed
-                 * - previous close changed
-                 *
-                 * Metadata-only changes do NOT increment it.
                  */
                 if (dataChanged) {
 
@@ -1436,8 +1916,6 @@ public class DividendService {
 
                 /*
                  * lastUpdated is only metadata.
-                 *
-                 * It does NOT itself cause a version increment.
                  */
                 cache.lastUpdated =
                         LocalDateTime.now(
@@ -1616,12 +2094,6 @@ public class DividendService {
                             + " expired dividend record(s) from cache."
             );
 
-            /*
-             * This is a frontend-visible data change.
-             *
-             * The caller will save with dataChanged = true,
-             * which increments the version.
-             */
             return true;
         }
 
@@ -3169,71 +3641,76 @@ public class DividendService {
         }
 
         System.out.println(
-                "Yahoo price requests: "
+                "Yahoo price requests in this batch: "
                         + sharesForYahoo.size()
         );
 
-        ExecutorService executor =
-                Executors.newFixedThreadPool(
-                        THREAD_COUNT
-                );
+        /*
+         * ========================================================
+         * IMPORTANT CHANGE
+         * ========================================================
+         *
+         * We DO NOT create:
+         *
+         * Executors.newFixedThreadPool(...)
+         *
+         * here anymore.
+         *
+         * We use the shared YAHOO_EXECUTOR.
+         *
+         * This prevents creating a new group of threads for every
+         * request/batch.
+         */
 
-        try {
+        List<CompletableFuture<Boolean>> futures =
+                new ArrayList<>();
 
-            List<CompletableFuture<Boolean>> futures =
-                    new ArrayList<>();
+        for (DividendData share :
+                sharesForYahoo) {
 
-            for (DividendData share :
-                    sharesForYahoo) {
-
-                CompletableFuture<Boolean> future =
-                        CompletableFuture.supplyAsync(
-                                () -> fetchYahooSingleSymbol(
-                                        share
-                                ),
-                                executor
-                        );
-
-                futures.add(
-                        future
-                );
-            }
-
-            CompletableFuture.allOf(
-                    futures.toArray(
-                            new CompletableFuture[0]
-                    )
-            ).join();
-
-            boolean changed = false;
-
-            for (CompletableFuture<Boolean> future :
-                    futures) {
-
-                try {
-
-                    if (Boolean.TRUE.equals(
-                            future.join()
-                    )) {
-
-                        changed = true;
-                    }
-
-                } catch (Exception e) {
-
-                    System.out.println(
-                            "Yahoo future failed: "
-                                    + e.getMessage()
+            CompletableFuture<Boolean> future =
+                    CompletableFuture.supplyAsync(
+                            () -> fetchYahooSingleSymbol(
+                                    share
+                            ),
+                            YAHOO_EXECUTOR
                     );
-                }
-            }
 
-            return changed;
-
-        } finally {
-
-            executor.shutdown();
+            futures.add(
+                    future
+            );
         }
+
+        CompletableFuture.allOf(
+                futures.toArray(
+                        new CompletableFuture[0]
+                )
+        ).join();
+
+        boolean changed = false;
+
+        for (CompletableFuture<Boolean> future :
+                futures) {
+
+            try {
+
+                if (Boolean.TRUE.equals(
+                        future.join()
+                )) {
+
+                    changed = true;
+                }
+
+            } catch (Exception e) {
+
+                System.out.println(
+                        "Yahoo future failed: "
+                                + e.getMessage()
+                );
+            }
+        }
+
+        return changed;
     }
 
     // ============================================================
@@ -3356,8 +3833,6 @@ public class DividendService {
             /*
              * Successful Yahoo response clears previous
              * NOT_FOUND state.
-             *
-             * This is also a cache data change.
              */
             if (!isEmpty(
                     share.yahooStatus
@@ -3924,8 +4399,6 @@ public class DividendService {
          * the frontend consumes.
          *
          * It changes ONLY when frontend-visible data changes.
-         *
-         * It does NOT change just because the cache file was saved.
          */
         private long version = 1;
 
