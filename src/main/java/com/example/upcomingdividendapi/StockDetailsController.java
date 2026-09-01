@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * ============================================================
- * STOCK DETAILS CONTROLLER
+ * STOCK DETAILS CONTROLLER k
  * ============================================================
  *
  * Provides historical stock price data to the frontend.
