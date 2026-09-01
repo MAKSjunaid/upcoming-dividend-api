@@ -45,34 +45,29 @@ import java.util.concurrent.Executors;
  *      1Y
  *      6M
  *      3M
+ *      1M
+ *      5D
  *
  * 7. Return PRICES, NOT percentages.
  *
- * 8. Cache results in memory.
+ * 8. Prefer Adjusted Close when available.
  *
- * 9. Later the Controller can expose these results
- *    directly to the frontend.
+ * 9. Fall back to normal Close when Adjusted Close
+ *    is unavailable.
  *
- * Example response:
+ * 10. Cache results in memory.
  *
- * [
- *   {
- *     "symbol": "POLYMED.NS",
- *     "5Y": 125.20,
- *     "3Y": 232.00,
- *     "1Y": 125.20,
- *     "6M": 232.00,
- *     "3M": 125.20
- *   },
- *   {
- *     "symbol": "BLS.NS",
- *     "5Y": 343.20,
- *     "3Y": 434.00,
- *     "1Y": 454.20,
- *     "6M": 56.00,
- *     "3M": 545.20
- *   }
- * ]
+ * 11. Historical target dates use the nearest available
+ *     trading-day price.
+ *
+ * 12. If no price exists before the target because the
+ *     Yahoo response begins slightly after the target,
+ *     the first available price after the target is used.
+ *
+ * Frontend formula:
+ *
+ * ((Current Price - Historical Price)
+ *      / Historical Price) * 100
  *
  * Java 8 compatible.
  *
@@ -116,12 +111,8 @@ public class HistoricalReturnService {
     /*
      * Yahoo Spark API.
      *
-     * Example:
-     *
-     * https://query1.finance.yahoo.com/v7/finance/spark
-     * ?symbols=MRF.NS,BLS.NS,TCS.NS
-     * &range=5y
-     * &interval=1d
+     * We request 5 years because all required periods
+     * are inside this range.
      */
     private static final String YAHOO_SPARK_URL =
             "https://query1.finance.yahoo.com/v7/finance/spark"
@@ -152,14 +143,6 @@ public class HistoricalReturnService {
     // CACHE
     // ============================================================
 
-    /*
-     * Cache historical results by Yahoo symbol.
-     *
-     * Example:
-     *
-     * POLYMED.NS -> HistoricalPriceResponse
-     * BLS.NS     -> HistoricalPriceResponse
-     */
     private final Map<String, HistoricalPriceResponse> cache =
             Collections.synchronizedMap(
                     new LinkedHashMap<>()
@@ -186,24 +169,6 @@ public class HistoricalReturnService {
     // GET HISTORICAL PRICES FOR ONE SYMBOL
     // ============================================================
 
-    /**
-     * Gets historical prices for one symbol.
-     *
-     * Example:
-     *
-     *     getHistoricalPrices("TCS")
-     *
-     * Returns:
-     *
-     * {
-     *   "symbol": "TCS.NS",
-     *   "5Y": 2500.20,
-     *   "3Y": 3100.40,
-     *   "1Y": 3500.10,
-     *   "6M": 3900.25,
-     *   "3M": 4100.80
-     * }
-     */
     public HistoricalPriceResponse getHistoricalPrices(
             String symbol
     ) {
@@ -221,11 +186,6 @@ public class HistoricalReturnService {
                 normalizeSymbol(symbol);
 
 
-        /*
-         * Convert to Yahoo format.
-         *
-         * TCS -> TCS.NS
-         */
         String yahooSymbol =
                 normalizedSymbol + ".NS";
 
@@ -269,21 +229,6 @@ public class HistoricalReturnService {
     // LOAD REAL SHARES FROM DIVIDEND SERVICE
     // ============================================================
 
-    /**
-     * Gets REAL symbols from DividendService.
-     *
-     * Then fetches historical prices for all shares.
-     *
-     * Maximum 20 symbols are sent in one Yahoo request.
-     *
-     * Example:
-     *
-     * 100 shares
-     *
-     * 100 / 20 = 5 Yahoo requests
-     *
-     * With 8 threads, those batches can execute in parallel.
-     */
     public void loadHistoricalDataFromDividendService()
             throws Exception {
 
@@ -309,12 +254,6 @@ public class HistoricalReturnService {
                 new DividendRequest();
 
 
-        /*
-         * Your DividendService already handles empty dates.
-         *
-         * from = tomorrow
-         * to   = one month later
-         */
         request.setFromDate(null);
 
         request.setToDate(null);
@@ -373,9 +312,6 @@ public class HistoricalReturnService {
                     normalizeSymbol(symbol);
 
 
-            /*
-             * Avoid duplicate symbols.
-             */
             if (!symbols.contains(normalized)) {
 
                 symbols.add(normalized);
@@ -452,9 +388,6 @@ public class HistoricalReturnService {
         }
 
 
-        /*
-         * One CompletableFuture per batch.
-         */
         List<CompletableFuture<Void>> futures =
                 new ArrayList<>();
 
@@ -505,9 +438,6 @@ public class HistoricalReturnService {
         }
 
 
-        /*
-         * Wait until ALL batches finish.
-         */
         CompletableFuture.allOf(
                 futures.toArray(
                         new CompletableFuture[0]
@@ -533,11 +463,6 @@ public class HistoricalReturnService {
 
         try {
 
-            /*
-             * Build:
-             *
-             * MRF.NS,BLS.NS,TCS.NS
-             */
             StringBuilder symbolBuilder =
                     new StringBuilder();
 
@@ -589,27 +514,18 @@ public class HistoricalReturnService {
             );
 
 
-            /*
-             * ONE HTTP request for maximum 20 symbols.
-             */
             String json =
                     fetchYahooData(
                             apiUrl
                     );
 
 
-            /*
-             * Parse all symbols.
-             */
             Map<String, HistoricalPriceResponse> results =
                     parseYahooResponse(
                             json
                     );
 
 
-            /*
-             * Store in cache.
-             */
             if (results != null
                     && !results.isEmpty()) {
 
@@ -673,9 +589,6 @@ public class HistoricalReturnService {
             }
 
 
-            /*
-             * Yahoo gives one result per symbol.
-             */
             for (JsonNode result :
                     resultArray) {
 
@@ -764,15 +677,6 @@ public class HistoricalReturnService {
         }
 
 
-        /*
-         * Keep Yahoo format in final response.
-         *
-         * Example:
-         *
-         * MRF.NS
-         * TCS.NS
-         * POLYMED.NS
-         */
         String symbol =
                 yahooSymbol
                         .trim()
@@ -815,7 +719,7 @@ public class HistoricalReturnService {
 
 
         // --------------------------------------------------------
-        // close[]
+        // normal close[]
         // --------------------------------------------------------
 
         JsonNode closePrices =
@@ -836,16 +740,29 @@ public class HistoricalReturnService {
                         .path("adjclose");
 
 
+        /*
+         * Keep adjustedClose.
+         *
+         * We use it when Yahoo actually provides valid
+         * adjusted values.
+         */
+        boolean hasAdjustedClose =
+                adjustedClose.isArray()
+                        && adjustedClose.size() > 0;
+
+
         if (!timestamps.isArray()
-                || !closePrices.isArray()) {
+                || timestamps.size() == 0) {
 
             return null;
         }
 
 
-        boolean hasAdjustedClose =
-                adjustedClose.isArray()
-                        && adjustedClose.size() > 0;
+        if (!closePrices.isArray()
+                || closePrices.size() == 0) {
+
+            return null;
+        }
 
 
         // --------------------------------------------------------
@@ -907,6 +824,12 @@ public class HistoricalReturnService {
         LocalDate date3M =
                 latestDate.minusMonths(3);
 
+        LocalDate date1M =
+                latestDate.minusMonths(1);
+
+        LocalDate date5D =
+                latestDate.minusDays(5);
+
 
         // --------------------------------------------------------
         // Find historical prices
@@ -922,7 +845,9 @@ public class HistoricalReturnService {
                         date3Y,
                         date1Y,
                         date6M,
-                        date3M
+                        date3M,
+                        date1M,
+                        date5D
                 );
 
 
@@ -937,7 +862,9 @@ public class HistoricalReturnService {
                 prices.price3Y,
                 prices.price1Y,
                 prices.price6M,
-                prices.price3M
+                prices.price3M,
+                prices.price1M,
+                prices.price5D
         );
     }
 
@@ -953,8 +880,15 @@ public class HistoricalReturnService {
             boolean hasAdjustedClose
     ) {
 
+        int maxIndex =
+                Math.min(
+                        timestamps.size(),
+                        closePrices.size()
+                );
+
+
         for (
-                int i = timestamps.size() - 1;
+                int i = maxIndex - 1;
                 i >= 0;
                 i--
         ) {
@@ -984,27 +918,25 @@ public class HistoricalReturnService {
     // ============================================================
 
     /**
-     * Finds the latest available price ON or BEFORE
-     * each target date.
+     * Finds the best available historical price for each
+     * requested period.
      *
-     * Example:
+     * Normal behavior:
      *
-     * Target:
-     * 2021-08-27
+     *     target date
+     *          |
+     *          v
+     *     latest price ON or BEFORE target
      *
-     * If Yahoo has:
+     * Fallback behavior:
      *
-     * 2021-08-26 -> 120
-     * 2021-08-27 -> no trading
-     * 2021-08-30 -> 125
+     * If the Yahoo 5Y response starts slightly AFTER the
+     * requested 5Y target, the first available price AFTER
+     * the target is used.
      *
-     * Then:
-     *
-     * 5Y price = 120
-     *
-     * This matches the logic from your Postman script:
-     *
-     * getPriceBefore(date)
+     * This prevents valid historical data from becoming N/A
+     * merely because Yahoo's returned range begins a few
+     * hours/days after the exact target boundary.
      */
     private HistoricalPrices findAllHistoricalPrices(
             JsonNode timestamps,
@@ -1015,61 +947,184 @@ public class HistoricalReturnService {
             LocalDate date3Y,
             LocalDate date1Y,
             LocalDate date6M,
-            LocalDate date3M
+            LocalDate date3M,
+            LocalDate date1M,
+            LocalDate date5D
     ) {
 
-        Double price5Y = null;
+        Double price5Y =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date5Y
+                );
 
-        Double price3Y = null;
 
-        Double price1Y = null;
+        Double price3Y =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date3Y
+                );
 
-        Double price6M = null;
 
-        Double price3M = null;
+        Double price1Y =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date1Y
+                );
+
+
+        Double price6M =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date6M
+                );
+
+
+        Double price3M =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date3M
+                );
+
+
+        Double price1M =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date1M
+                );
+
+
+        Double price5D =
+                findHistoricalPrice(
+                        timestamps,
+                        closePrices,
+                        adjustedClose,
+                        hasAdjustedClose,
+                        date5D
+                );
+
+
+        return new HistoricalPrices(
+                price5Y,
+                price3Y,
+                price1Y,
+                price6M,
+                price3M,
+                price1M,
+                price5D
+        );
+    }
+
+
+    // ============================================================
+    // FIND ONE HISTORICAL PRICE
+    // ============================================================
+
+    /**
+     * Finds the best available trading price for a target date.
+     *
+     * Step 1:
+     *
+     * Find the latest valid trading price ON or BEFORE
+     * the target date.
+     *
+     * Step 2:
+     *
+     * If no such price exists, find the earliest valid
+     * trading price AFTER the target date.
+     *
+     * This makes the method robust against:
+     *
+     * - weekends
+     * - holidays
+     * - Yahoo range boundaries
+     * - missing daily candles
+     * - IPOs whose history starts close to a target date
+     */
+    private Double findHistoricalPrice(
+            JsonNode timestamps,
+            JsonNode closePrices,
+            JsonNode adjustedClose,
+            boolean hasAdjustedClose,
+            LocalDate targetDate
+    ) {
+
+        if (timestamps == null
+                || !timestamps.isArray()
+                || timestamps.size() == 0
+                || targetDate == null) {
+
+            return null;
+        }
 
 
         /*
-         * Process oldest -> newest.
+         * --------------------------------------------------------
+         * FIRST PASS
          *
-         * Every time we find a valid price ON or BEFORE
-         * a target date, we update that target.
-         *
-         * Therefore the final stored price is the latest
-         * available trading price before that target date.
+         * Find latest valid price ON or BEFORE target date.
+         * --------------------------------------------------------
          */
+
+        Double previousPrice =
+                null;
+
+
+        LocalDate previousDate =
+                null;
+
+
+        int maxIndex =
+                Math.min(
+                        timestamps.size(),
+                        closePrices.size()
+                );
+
+
         for (
                 int i = 0;
-                i < timestamps.size();
+                i < maxIndex;
                 i++
         ) {
 
-            long timestamp =
-                    timestamps
-                            .get(i)
-                            .asLong();
+            JsonNode timestampNode =
+                    timestamps.get(i);
+
+
+            if (timestampNode == null
+                    || !timestampNode.isNumber()) {
+
+                continue;
+            }
 
 
             LocalDate currentDate =
                     Instant
                             .ofEpochSecond(
-                                    timestamp
+                                    timestampNode.asLong()
                             )
                             .atZone(
                                     INDIA_ZONE
                             )
                             .toLocalDate();
-
-
-            /*
-             * Once currentDate is greater than the largest
-             * target date (3M), all required target dates
-             * have already been found.
-             */
-            if (currentDate.isAfter(date3M)) {
-
-                break;
-            }
 
 
             JsonNode priceNode =
@@ -1087,68 +1142,103 @@ public class HistoricalReturnService {
             }
 
 
-            double price =
+            /*
+             * We have gone beyond the target.
+             *
+             * Stop the first pass.
+             */
+            if (currentDate.isAfter(targetDate)) {
+
+                break;
+            }
+
+
+            previousPrice =
                     priceNode.asDouble();
 
 
-            // ----------------------------------------------------
-            // 5 YEARS
-            // ----------------------------------------------------
+            previousDate =
+                    currentDate;
+        }
 
-            if (!currentDate.isAfter(date5Y)) {
 
-                price5Y = price;
+        /*
+         * If we found a valid previous trading day,
+         * use it.
+         */
+        if (previousPrice != null) {
+
+            return previousPrice;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * SECOND PASS
+         *
+         * No price existed before the target.
+         *
+         * This usually happens because the Yahoo 5Y response
+         * starts slightly after the exact 5-year target.
+         *
+         * Use the first valid price AFTER the target.
+         * --------------------------------------------------------
+         */
+
+        for (
+                int i = 0;
+                i < maxIndex;
+                i++
+        ) {
+
+            JsonNode timestampNode =
+                    timestamps.get(i);
+
+
+            if (timestampNode == null
+                    || !timestampNode.isNumber()) {
+
+                continue;
             }
 
 
-            // ----------------------------------------------------
-            // 3 YEARS
-            // ----------------------------------------------------
+            LocalDate currentDate =
+                    Instant
+                            .ofEpochSecond(
+                                    timestampNode.asLong()
+                            )
+                            .atZone(
+                                    INDIA_ZONE
+                            )
+                            .toLocalDate();
 
-            if (!currentDate.isAfter(date3Y)) {
 
-                price3Y = price;
+            if (currentDate.isBefore(targetDate)) {
+
+                continue;
             }
 
 
-            // ----------------------------------------------------
-            // 1 YEAR
-            // ----------------------------------------------------
-
-            if (!currentDate.isAfter(date1Y)) {
-
-                price1Y = price;
-            }
-
-
-            // ----------------------------------------------------
-            // 6 MONTHS
-            // ----------------------------------------------------
-
-            if (!currentDate.isAfter(date6M)) {
-
-                price6M = price;
-            }
+            JsonNode priceNode =
+                    getPriceNode(
+                            closePrices,
+                            adjustedClose,
+                            hasAdjustedClose,
+                            i
+                    );
 
 
-            // ----------------------------------------------------
-            // 3 MONTHS
-            // ----------------------------------------------------
+            if (isValidPrice(priceNode)) {
 
-            if (!currentDate.isAfter(date3M)) {
-
-                price3M = price;
+                return priceNode.asDouble();
             }
         }
 
 
-        return new HistoricalPrices(
-                price5Y,
-                price3Y,
-                price1Y,
-                price6M,
-                price3M
-        );
+        /*
+         * No usable historical price exists.
+         */
+        return null;
     }
 
 
@@ -1157,9 +1247,12 @@ public class HistoricalReturnService {
     // ============================================================
 
     /**
-     * Prefer adjusted close when Yahoo provides it.
+     * Prefer Adjusted Close when Yahoo provides a valid value.
      *
-     * Otherwise use normal close.
+     * Otherwise use normal Close.
+     *
+     * This preserves the adjustedClose / hasAdjustedClose
+     * behavior.
      */
     private JsonNode getPriceNode(
             JsonNode closePrices,
@@ -1188,9 +1281,17 @@ public class HistoricalReturnService {
         /*
          * Normal close fallback.
          */
-        if (index < closePrices.size()) {
+        if (closePrices != null
+                && index < closePrices.size()) {
 
-            return closePrices.get(index);
+            JsonNode close =
+                    closePrices.get(index);
+
+
+            if (isValidPrice(close)) {
+
+                return close;
+            }
         }
 
 
@@ -1487,6 +1588,22 @@ public class HistoricalReturnService {
                             response.getPrice3M()
                     )
             );
+
+
+            System.out.println(
+                    "1M Price : "
+                            + formatPrice(
+                            response.getPrice1M()
+                    )
+            );
+
+
+            System.out.println(
+                    "5D Price : "
+                            + formatPrice(
+                            response.getPrice5D()
+                    )
+            );
         }
 
 
@@ -1581,6 +1698,22 @@ public class HistoricalReturnService {
                         response.getPrice3M()
                 )
         );
+
+
+        System.out.println(
+                "1M Price: "
+                        + formatPrice(
+                        response.getPrice1M()
+                )
+        );
+
+
+        System.out.println(
+                "5D Price: "
+                        + formatPrice(
+                        response.getPrice5D()
+                )
+        );
     }
 
 
@@ -1588,9 +1721,6 @@ public class HistoricalReturnService {
     // CACHE CONTROL
     // ============================================================
 
-    /**
-     * Clears historical price cache.
-     */
     public void clearCache() {
 
         cache.clear();
@@ -1602,9 +1732,6 @@ public class HistoricalReturnService {
     }
 
 
-    /**
-     * Returns number of cached symbols.
-     */
     public int getCachedSymbolCount() {
 
         return cache.size();
@@ -1615,18 +1742,6 @@ public class HistoricalReturnService {
     // NORMALIZE SYMBOL
     // ============================================================
 
-    /**
-     * Converts:
-     *
-     * TCS
-     * TCS.NS
-     * tcs
-     * tcs.ns
-     *
-     * into:
-     *
-     * TCS
-     */
     private String normalizeSymbol(
             String symbol
     ) {
@@ -1694,13 +1809,19 @@ public class HistoricalReturnService {
 
         private final Double price3M;
 
+        private final Double price1M;
+
+        private final Double price5D;
+
 
         private HistoricalPrices(
                 Double price5Y,
                 Double price3Y,
                 Double price1Y,
                 Double price6M,
-                Double price3M
+                Double price3M,
+                Double price1M,
+                Double price5D
         ) {
 
             this.price5Y = price5Y;
@@ -1712,6 +1833,10 @@ public class HistoricalReturnService {
             this.price6M = price6M;
 
             this.price3M = price3M;
+
+            this.price1M = price1M;
+
+            this.price5D = price5D;
         }
     }
 
@@ -1722,35 +1847,24 @@ public class HistoricalReturnService {
 
     public static class HistoricalPriceResponse {
 
-        /*
-         * We want:
-         *
-         * "symbol": "POLYMED.NS"
-         */
         private final String symbol;
 
 
         /*
-         * Kept internally for debugging/logging.
+         * Internal only.
          *
-         * We will NOT expose this through JSON if you use
-         * the Jackson annotations shown below.
+         * Not exposed through JSON.
          */
         @com.fasterxml.jackson.annotation.JsonIgnore
         private final LocalDate latestDate;
 
 
         /*
-         * IMPORTANT:
+         * HISTORICAL PRICES.
          *
-         * @JsonProperty allows the JSON field names to be:
-         *
-         * "5Y"
-         * "3Y"
-         * "1Y"
-         * "6M"
-         * "3M"
+         * These are NOT percentages.
          */
+
         @com.fasterxml.jackson.annotation.JsonProperty("5Y")
         private final Double price5Y;
 
@@ -1771,6 +1885,14 @@ public class HistoricalReturnService {
         private final Double price3M;
 
 
+        @com.fasterxml.jackson.annotation.JsonProperty("1M")
+        private final Double price1M;
+
+
+        @com.fasterxml.jackson.annotation.JsonProperty("5D")
+        private final Double price5D;
+
+
         public HistoricalPriceResponse(
                 String symbol,
                 LocalDate latestDate,
@@ -1778,7 +1900,9 @@ public class HistoricalReturnService {
                 Double price3Y,
                 Double price1Y,
                 Double price6M,
-                Double price3M
+                Double price3M,
+                Double price1M,
+                Double price5D
         ) {
 
             this.symbol = symbol;
@@ -1794,6 +1918,10 @@ public class HistoricalReturnService {
             this.price6M = price6M;
 
             this.price3M = price3M;
+
+            this.price1M = price1M;
+
+            this.price5D = price5D;
         }
 
 
@@ -1837,7 +1965,17 @@ public class HistoricalReturnService {
 
             return price3M;
         }
+
+
+        public Double getPrice1M() {
+
+            return price1M;
+        }
+
+
+        public Double getPrice5D() {
+
+            return price5D;
+        }
     }
 }
-
-//DONE //
