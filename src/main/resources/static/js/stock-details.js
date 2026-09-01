@@ -2,7 +2,7 @@
    STOCK DETAILS
    =========================================================
  *
- * This file ONLY handles clicking a stock card and
+ * This file ONLY handles clicking a stock card andd
  * displaying stock historical return data.
  *
  * It does NOT:
