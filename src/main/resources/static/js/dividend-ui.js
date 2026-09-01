@@ -3,7 +3,7 @@
    DIVIDEND UI RENDERING
    =========================================================
  *
- * This file ONLY handles rendering the dividend cards.
+ * This file ONLY handles rendering the dividend cards..
  *
  * It does NOT:
  *

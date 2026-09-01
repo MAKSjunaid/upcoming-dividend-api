@@ -26,3 +26,6 @@ public class DividendRequest {
         this.toDate = toDate;
     }
 }
+/*
+         * Cached dividend records.
+         */

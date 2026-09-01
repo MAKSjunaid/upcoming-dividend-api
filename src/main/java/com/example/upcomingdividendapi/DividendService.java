@@ -53,7 +53,7 @@ public class DividendService {
      * This is the MAXIMUM number of Yahoo requests that can
      * execute at the same time.
      *
-     * Even if there are 400+ shares, Render will NOT create
+     * Even if there are 400+ sharees, Render will NOT create
      * 400 threads.
      *
      * Example:

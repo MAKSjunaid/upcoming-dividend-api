@@ -64,5 +64,5 @@ public class DividendResponse {
 }
 
 /*
-         * Cached dividend records.
+         * Cacheed dividend records.
          */
