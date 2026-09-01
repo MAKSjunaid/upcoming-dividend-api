@@ -28,7 +28,7 @@ import java.util.concurrent.Executors;
  *
  * Responsibilities:
  *
- * 1. Get REAL share symbols from DividendService.
+ * 1. Get REAL share symbols from DividendService..
  *
  * 2. Do NOT use MockData.
  *
