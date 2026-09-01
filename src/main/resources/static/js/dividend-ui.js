@@ -29,6 +29,961 @@
 
 
 /* =========================================================
+   FAVORITE RAPID-CLICK STAR SHATTER
+   =========================================================
+ *
+ * Behavior:
+ *
+ * - 15 favorite/unfavorite operations within 4 seconds
+ *   triggers the animation.
+ *
+ * - ONE yellow star appears.
+ *
+ * - The star breaks into many tiny pieces.
+ *
+ * - Pieces fly mostly UPWARD.
+ *
+ * - Only a small amount of left/right movement.
+ *
+ * - No extra star characters are created.
+ *
+ * - Animation lasts 3 seconds.
+ *
+ * - Favorite button stays hidden for 8 seconds.
+ *
+ * - The effect can be triggered repeatedly.
+ */
+
+
+/* =========================================================
+   FAVORITE ANIMATION CONFIGURATION
+   ========================================================= */
+
+const FAVORITE_BURST_CLICK_LIMIT = 15;
+
+const FAVORITE_BURST_TIME_WINDOW = 4000;
+
+const FAVORITE_BURST_ANIMATION_DURATION = 4000;
+
+const FAVORITE_BURST_BUTTON_COOLDOWN = 8000;
+
+
+/* =========================================================
+   GLOBAL FAVORITE BURST STATE
+   =========================================================
+ *
+ * Stored on window so re-rendering the stock cards
+ * does not reset the rapid-click tracking.
+ */
+
+if (
+    !window.__favoriteBurstState
+) {
+
+    window.__favoriteBurstState = {
+
+        clicks: new Map(),
+
+        cooldowns: new Map(),
+
+        cssLoaded: false
+    };
+}
+
+
+/* =========================================================
+   CREATE FAVORITE ANIMATION CSS
+   ========================================================= */
+
+function ensureFavoriteBurstCSS() {
+
+    if (
+        window.__favoriteBurstState.cssLoaded
+    ) {
+
+        return;
+    }
+
+
+    const style =
+        document.createElement(
+            "style"
+        );
+
+
+    style.id =
+        "favorite-star-shatter-style";
+
+
+    style.textContent = `
+
+        /* =================================================
+           ANIMATION CONTAINER
+           ================================================= */
+
+        .favorite-burst-container {
+
+            position: fixed;
+
+            left: 0;
+
+            top: 0;
+
+            width: 0;
+
+            height: 0;
+
+            z-index: 999999;
+
+            pointer-events: none;
+        }
+
+
+        /* =================================================
+           ORIGINAL SINGLE STAR
+           ================================================= */
+
+        .favorite-burst-main-star {
+
+            position: absolute;
+
+            left: 0;
+
+            top: 0;
+
+            transform:
+                translate(-50%, -50%)
+                scale(0);
+
+            font-size: 56px;
+
+            line-height: 1;
+
+            color: #ffd700;
+
+            text-shadow:
+                0 0 6px rgba(255, 215, 0, 0.95),
+                0 0 14px rgba(255, 215, 0, 0.70),
+                0 0 25px rgba(255, 215, 0, 0.45);
+
+            animation:
+                favoriteStarAppearAndBreak
+                850ms
+                ease-out
+                forwards;
+        }
+
+
+        /* =================================================
+           BROKEN STAR PIECE
+           ================================================= */
+
+        .favorite-star-fragment {
+
+            position: absolute;
+
+            left: 0;
+
+            top: 0;
+
+            width: 7px;
+
+            height: 7px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #fff7a8,
+                    #ffd700,
+                    #f5b400
+                );
+
+            box-shadow:
+                0 0 5px rgba(255, 215, 0, 0.80);
+
+            opacity: 0;
+
+            transform:
+                translate(-50%, -50%)
+                translate(0, 0)
+                rotate(0deg)
+                scale(0.2);
+
+            animation:
+                favoriteStarFragmentRise
+                4000ms
+                cubic-bezier(.25,.65,.35,1)
+                forwards;
+        }
+
+
+        /* =================================================
+           ORIGINAL STAR ANIMATION
+           ================================================= */
+
+        @keyframes favoriteStarAppearAndBreak {
+
+            0% {
+
+                opacity: 0;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(0);
+            }
+
+
+            15% {
+
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1);
+            }
+
+
+            35% {
+
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1.08);
+            }
+
+
+            55% {
+
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1);
+            }
+
+
+            /*
+             * The star remains visible briefly,
+             * then disappears as if breaking apart.
+             */
+
+            65% {
+
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1.02);
+            }
+
+
+            72% {
+
+                opacity: 0;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1.12);
+            }
+
+
+            100% {
+
+                opacity: 0;
+
+                transform:
+                    translate(-50%, -50%)
+                    scale(1.12);
+            }
+        }
+
+
+        /* =================================================
+           BROKEN PIECES FLY UPWARD
+           ================================================= */
+
+        @keyframes favoriteStarFragmentRise {
+
+            0% {
+
+                opacity: 0;
+
+                transform:
+                    translate(-50%, -50%)
+                    translate(
+                        var(--start-x),
+                        var(--start-y)
+                    )
+                    rotate(0deg)
+                    scale(0.2);
+            }
+
+
+            /*
+             * Pieces appear at the moment
+             * the original star breaks.
+             */
+
+            15% {
+
+                opacity: 1;
+
+                transform:
+                    translate(-50%, -50%)
+                    translate(
+                        var(--start-x),
+                        var(--start-y)
+                    )
+                    rotate(
+                        var(--start-rotation)
+                    )
+                    scale(1);
+            }
+
+
+            /*
+             * Stay visible while slowly
+             * moving upward.
+             */
+
+            55% {
+
+                opacity: 0.85;
+            }
+
+
+            /*
+             * Start fading.
+             */
+
+            78% {
+
+                opacity: 0.55;
+            }
+
+
+            /*
+             * Finish high above the button.
+             */
+
+            100% {
+
+                opacity: 0;
+
+                transform:
+                    translate(-50%, -50%)
+                    translate(
+                        var(--end-x),
+                        var(--end-y)
+                    )
+                    rotate(
+                        var(--end-rotation)
+                    )
+                    scale(0.15);
+            }
+        }
+
+
+        /* =================================================
+           FAVORITE BUTTON 8 SECOND COOLDOWN
+           ================================================= */
+
+        .favorite-button.favorite-burst-cooldown {
+
+            visibility: hidden !important;
+
+            opacity: 0 !important;
+
+            pointer-events: none !important;
+        }
+
+    `;
+
+
+    document.head.appendChild(
+        style
+    );
+
+
+    window.__favoriteBurstState.cssLoaded =
+        true;
+}
+
+
+/* =========================================================
+   CREATE ONE BROKEN STAR PIECE
+   ========================================================= */
+
+function createFavoriteStarFragment(
+    container
+) {
+
+    const fragment =
+        document.createElement(
+            "span"
+        );
+
+
+    fragment.className =
+        "favorite-star-fragment";
+
+
+    /*
+     * Pieces begin very close to
+     * the original star.
+     */
+
+    const startX =
+        (
+            Math.random() *
+            22
+        ) -
+        11;
+
+
+    const startY =
+        (
+            Math.random() *
+            22
+        ) -
+        11;
+
+
+    /*
+     * IMPORTANT:
+     *
+     * Pieces move mostly UP.
+     *
+     * Horizontal movement is intentionally
+     * limited so it does not look like an
+     * explosion.
+     */
+
+    const endX =
+        (
+            Math.random() *
+            100
+        ) -
+        50;
+
+
+    const endY =
+        -(
+            80 +
+            Math.random() *
+            190
+        );
+
+
+    const startRotation =
+        (
+            Math.random() *
+            80
+        ) -
+        40;
+
+
+    const endRotation =
+        (
+            Math.random() *
+            500
+        ) -
+        250;
+
+
+    fragment.style.setProperty(
+        "--start-x",
+        `${startX}px`
+    );
+
+
+    fragment.style.setProperty(
+        "--start-y",
+        `${startY}px`
+    );
+
+
+    fragment.style.setProperty(
+        "--end-x",
+        `${endX}px`
+    );
+
+
+    fragment.style.setProperty(
+        "--end-y",
+        `${endY}px`
+    );
+
+
+    fragment.style.setProperty(
+        "--start-rotation",
+        `${startRotation}deg`
+    );
+
+
+    fragment.style.setProperty(
+        "--end-rotation",
+        `${endRotation}deg`
+    );
+
+
+    /*
+     * Pieces start at slightly different
+     * times so the break looks natural.
+     */
+
+    const delay =
+        Math.random() *
+        220;
+
+
+    fragment.style.animationDelay =
+        `${delay}ms`;
+
+
+    /*
+     * Random fragment size.
+     */
+
+    const size =
+        4 +
+        Math.random() *
+        7;
+
+
+    fragment.style.width =
+        `${size}px`;
+
+
+    fragment.style.height =
+        `${size}px`;
+
+
+    /*
+     * Different geometric shapes make
+     * the pieces look broken.
+     */
+
+    const shape =
+        Math.floor(
+            Math.random() * 5
+        );
+
+
+    if (
+        shape === 0
+    ) {
+
+        fragment.style.clipPath =
+            "polygon(50% 0%, 100% 100%, 0% 100%)";
+
+    } else if (
+        shape === 1
+    ) {
+
+        fragment.style.clipPath =
+            "polygon(0% 0%, 100% 35%, 75% 100%, 0% 75%)";
+
+    } else if (
+        shape === 2
+    ) {
+
+        fragment.style.clipPath =
+            "polygon(25% 0%, 100% 25%, 75% 100%, 0% 75%)";
+
+    } else if (
+        shape === 3
+    ) {
+
+        fragment.style.clipPath =
+            "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)";
+
+    } else {
+
+        fragment.style.clipPath =
+            "polygon(0% 20%, 80% 0%, 100% 80%, 20% 100%)";
+    }
+
+
+    container.appendChild(
+        fragment
+    );
+}
+
+
+/* =========================================================
+   PLAY FAVORITE STAR SHATTER
+   ========================================================= */
+
+function playFavoriteStarBurst(
+    favoriteButton
+) {
+
+    if (
+        !favoriteButton
+    ) {
+
+        return;
+    }
+
+
+    ensureFavoriteBurstCSS();
+
+
+    /*
+     * Find exact position of the
+     * favorite button.
+     */
+
+    const rect =
+        favoriteButton.getBoundingClientRect();
+
+
+    const centerX =
+        rect.left +
+        rect.width /
+        2;
+
+
+    const centerY =
+        rect.top +
+        rect.height /
+        2;
+
+
+    /*
+     * Create animation container.
+     */
+
+    const container =
+        document.createElement(
+            "div"
+        );
+
+
+    container.className =
+        "favorite-burst-container";
+
+
+    container.style.left =
+        `${centerX}px`;
+
+
+    container.style.top =
+        `${centerY}px`;
+
+
+    document.body.appendChild(
+        container
+    );
+
+
+    /* =====================================================
+       ONE ORIGINAL STAR
+       ===================================================== */
+
+    const mainStar =
+        document.createElement(
+            "span"
+        );
+
+
+    mainStar.className =
+        "favorite-burst-main-star";
+
+
+    mainStar.textContent =
+        "★";
+
+
+    container.appendChild(
+        mainStar
+    );
+
+
+    /* =====================================================
+       CREATE BROKEN PIECES
+       =====================================================
+     *
+     * These are small geometric fragments.
+     *
+     * They are NOT additional stars.
+     */
+
+    const fragmentCount =
+        65;
+
+
+    for (
+        let i = 0;
+        i < fragmentCount;
+        i++
+    ) {
+
+        createFavoriteStarFragment(
+            container
+        );
+    }
+
+
+    /*
+     * Remove the animation after
+     * the complete 3-second animation.
+     */
+
+    setTimeout(
+        function() {
+
+            if (
+                container &&
+                container.parentNode
+            ) {
+
+                container.parentNode.removeChild(
+                    container
+                );
+            }
+
+        },
+        FAVORITE_BURST_ANIMATION_DURATION + 250
+    );
+}
+
+
+/* =========================================================
+   START FAVORITE BUTTON COOLDOWN
+   ========================================================= */
+
+function startFavoriteButtonCooldown(
+    favoriteButton,
+    favoriteKey
+) {
+
+    if (
+        !favoriteButton
+    ) {
+
+        return;
+    }
+
+
+    const cooldowns =
+        window.__favoriteBurstState.cooldowns;
+
+
+    /*
+     * Clear any existing timer.
+     */
+
+    const existingTimer =
+        cooldowns.get(
+            favoriteKey
+        );
+
+
+    if (
+        existingTimer
+    ) {
+
+        clearTimeout(
+            existingTimer
+        );
+    }
+
+
+    /*
+     * Hide button immediately.
+     */
+
+    favoriteButton.classList.add(
+        "favorite-burst-cooldown"
+    );
+
+
+    /*
+     * Keep it hidden for 8 seconds.
+     */
+
+    const timer =
+        setTimeout(
+            function() {
+
+                cooldowns.delete(
+                    favoriteKey
+                );
+
+
+                /*
+                 * The card may still exist.
+                 */
+
+                if (
+                    favoriteButton &&
+                    favoriteButton.isConnected
+                ) {
+
+                    favoriteButton.classList.remove(
+                        "favorite-burst-cooldown"
+                    );
+                }
+
+            },
+            FAVORITE_BURST_BUTTON_COOLDOWN
+        );
+
+
+    cooldowns.set(
+        favoriteKey,
+        timer
+    );
+}
+
+
+/* =========================================================
+   SYNC COOLDOWN AFTER RE-RENDER
+   ========================================================= */
+
+function syncFavoriteButtonCooldown(
+    favoriteButton,
+    favoriteKey
+) {
+
+    if (
+        !favoriteButton
+    ) {
+
+        return;
+    }
+
+
+    const cooldowns =
+        window.__favoriteBurstState.cooldowns;
+
+
+    if (
+        cooldowns.has(
+            favoriteKey
+        )
+    ) {
+
+        favoriteButton.classList.add(
+            "favorite-burst-cooldown"
+        );
+    }
+}
+
+
+/* =========================================================
+   RECORD FAVORITE CLICK
+   ========================================================= */
+
+function recordFavoriteClick(
+    favoriteKey,
+    favoriteButton
+) {
+
+    const now =
+        Date.now();
+
+
+    const clicks =
+        window.__favoriteBurstState.clicks;
+
+
+    let timestamps =
+        clicks.get(
+            favoriteKey
+        );
+
+
+    if (
+        !timestamps
+    ) {
+
+        timestamps = [];
+
+        clicks.set(
+            favoriteKey,
+            timestamps
+        );
+    }
+
+
+    /*
+     * Remove clicks older than 4 seconds.
+     */
+
+    timestamps =
+        timestamps.filter(
+            function(timestamp) {
+
+                return (
+                    now -
+                    timestamp
+                ) <=
+                    FAVORITE_BURST_TIME_WINDOW;
+            }
+        );
+
+
+    /*
+     * Record current click.
+     */
+
+    timestamps.push(
+        now
+    );
+
+
+    clicks.set(
+        favoriteKey,
+        timestamps
+    );
+
+
+    /*
+     * 15 operations within 4 seconds.
+     */
+
+    if (
+        timestamps.length >=
+        FAVORITE_BURST_CLICK_LIMIT
+    ) {
+
+        /*
+         * Reset immediately.
+         *
+         * This allows another burst later.
+         */
+
+        clicks.delete(
+            favoriteKey
+        );
+
+
+        /*
+         * Play the broken-star animation.
+         */
+
+        playFavoriteStarBurst(
+            favoriteButton
+        );
+
+
+        /*
+         * Hide the button for 8 seconds.
+         */
+
+        startFavoriteButtonCooldown(
+            favoriteButton,
+            favoriteKey
+        );
+    }
+}
+
+
+/* =========================================================
    HIGHEST EXPECTED DIVIDEND
    ========================================================= */
 
@@ -547,6 +1502,14 @@ function renderStocks(
     allData = dividendData
 ) {
 
+    /*
+     * Make sure favorite animation CSS
+     * has been loaded.
+     */
+
+    ensureFavoriteBurstCSS();
+
+
     stockList.innerHTML = "";
 
 
@@ -642,17 +1605,6 @@ function renderStocks(
 
     /*
      * Protect against an invalid current page.
-     *
-     * Example:
-     *
-     * User is on page 7.
-     *
-     * Automatic refresh reduces the data
-     * from 327 shares to 215 shares.
-     *
-     * Page 7 no longer exists.
-     *
-     * We automatically move to page 5.
      */
 
     if (
@@ -798,9 +1750,6 @@ function renderStocks(
             /*
              * Animation starts from zero for
              * every page.
-             *
-             * This means page 2 will animate
-             * nicely when opened.
              */
 
             card.style.animationDelay =
@@ -1014,6 +1963,18 @@ function renderStocks(
                 );
 
 
+            /*
+             * If this company is already
+             * in the 8-second cooldown,
+             * keep the newly rendered button hidden.
+             */
+
+            syncFavoriteButtonCooldown(
+                favoriteButton,
+                favoriteKey
+            );
+
+
             favoriteButton.addEventListener(
                 "click",
                 function(event) {
@@ -1023,8 +1984,44 @@ function renderStocks(
                     event.stopPropagation();
 
 
+                    /*
+                     * Do not allow clicks while
+                     * the 8-second cooldown is active.
+                     */
+
+                    if (
+                        favoriteButton.classList.contains(
+                            "favorite-burst-cooldown"
+                        )
+                    ) {
+
+                        return;
+                    }
+
+
+                    /*
+                     * EXISTING FAVORITE LOGIC
+                     *
+                     * This remains responsible for:
+                     *
+                     * - adding favorite
+                     * - removing favorite
+                     * - localStorage
+                     * - existing favorite UI behavior
+                     */
+
                     toggleFavorite(
                         stock,
+                        favoriteButton
+                    );
+
+
+                    /*
+                     * NEW RAPID CLICK DETECTOR
+                     */
+
+                    recordFavoriteClick(
+                        favoriteKey,
                         favoriteButton
                     );
                 }
