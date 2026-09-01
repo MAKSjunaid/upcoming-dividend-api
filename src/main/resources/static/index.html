@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -406,11 +407,42 @@
 </div>
 
 
-<script src="/js/app.js"></script>
+<!-- =====================================================
+     JAVASCRIPT
+     ================================================= -->
+
+<!--
+     dividend-ui.js contains the existing stock-card
+     rendering and pagination logic.
+-->
 <script src="/js/dividend-ui.js"></script>
+
+
+<!--
+     app.js contains the existing application logic:
+     - API calls
+     - search
+     - sorting
+     - favorites
+     - investment calculations
+     - pull-to-refresh
+     - automatic refresh
+-->
+<script src="/js/app.js"></script>
+
+
+<!--
+     stock-details.js contains ONLY the new
+     stock-details / historical-data frontend logic.
+
+     It is intentionally kept separate from app.js
+     and dividend-ui.js.
+-->
+<script src="/js/stock-details.js"></script>
 
 
 </body>
 
 </html>
 
+<!--/* 30TH AUG FINAL */-->
