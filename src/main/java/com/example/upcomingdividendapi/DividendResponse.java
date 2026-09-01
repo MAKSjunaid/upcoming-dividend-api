@@ -62,3 +62,7 @@ public class DividendResponse {
         return previousSharePrice;
     }
 }
+
+/*
+         * Cached dividend records.
+         */
