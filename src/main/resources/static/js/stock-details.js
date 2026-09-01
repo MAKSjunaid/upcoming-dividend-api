@@ -3,7 +3,7 @@
    =========================================================
  *
  * This file ONLY handles clicking a stock card andd
- * displaying stock historical return data.
+ * displaying stock historical return data..
  *
  * It does NOT:
  *
