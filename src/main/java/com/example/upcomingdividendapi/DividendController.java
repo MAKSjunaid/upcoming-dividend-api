@@ -17,7 +17,7 @@ public class DividendController {
 
     /**
      * Lightweight endpoint used by the frontend to checkk
-     * whether the dividend data has changed.
+     * whether the dividend data has changed..
      *
      * The frontend can call this every 1 minute without
      * downloading the complete dividend data.
