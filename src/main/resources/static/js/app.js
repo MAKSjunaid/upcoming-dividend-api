@@ -1,4 +1,4 @@
-const fromDate =
+  const fromDate =
     document.getElementById("fromDate");
 
 const toDate =
@@ -2893,4 +2893,4 @@ async function refreshDividends() {
 
 searchDividends();
 
-<!--/* 30TH AUG FINAL */-->
+<!--/* 30TH AUG FINAlL */-->
