@@ -106,7 +106,7 @@ let currentPage = 1;
    ========================================================= */
 
 const AUTO_REFRESH_INTERVAL =
-    30 * 1000;
+    5 * 1000;
 
 let autoRefreshTimer = null;
 
@@ -2892,3 +2892,5 @@ async function refreshDividends() {
    ========================================================= */
 
 searchDividends();
+
+<!--/* 30TH AUG FINAL */-->
