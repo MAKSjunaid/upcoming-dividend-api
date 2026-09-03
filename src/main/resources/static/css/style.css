@@ -950,8 +950,29 @@ body {
 .stock-list {
 
     padding: 6px 12px 25px;
+
+    /*
+     * Keep the list in the document flow.
+     * This prevents the lower part of the page from
+     * collapsing during a JSON refresh.
+     */
+
+    min-height: 1px;
 }
 
+
+/*
+ * IMPORTANT:
+ *
+ * Cards are intentionally rendered immediately.
+ *
+ * There is NO opacity: 0.
+ * There is NO transform animation.
+ * There is NO animation delay.
+ *
+ * This prevents the blank-card / blink effect when
+ * renderStocks() replaces the DOM after JSON arrives.
+ */
 
 .stock-card {
 
@@ -971,17 +992,19 @@ body {
         0 3px 10px rgba(25, 35, 55, 0.03),
         0 7px 18px rgba(25, 35, 55, 0.03);
 
-    opacity: 0;
+    opacity: 1;
 
-    transform:
-        translateY(10px)
-        scale(0.99);
+    transform: none;
 
-    animation:
-        stockCardAppear
-        0.38s
-        cubic-bezier(0.22, 1, 0.36, 1)
-        forwards;
+    animation: none;
+
+    /*
+     * Do not transition opacity/transform.
+     * Doing so can create a visible blink while the
+     * cards are replaced.
+     */
+
+    transition: none;
 }
 
 
@@ -1182,24 +1205,6 @@ body {
 
         box-shadow:
             0 0 12px rgba(30, 144, 200, 0.16);
-    }
-}
-
-
-@keyframes stockCardAppear {
-
-    0% {
-        opacity: 0;
-        transform:
-            translateY(10px)
-            scale(0.99);
-    }
-
-    100% {
-        opacity: 1;
-        transform:
-            translateY(0)
-            scale(1);
     }
 }
 
@@ -1549,15 +1554,7 @@ body {
  *
  * This prevents the performance section from
  * disappearing first and then moving upward.
- *
- * The animation is slightly slower at 0.32s so
- * both minimize and maximize feel smoother.
  */
-
-
-/* =========================================================
-   STOCK DETAILS PANEL
-   ========================================================= */
 
 .stock-details-panel {
 
@@ -1576,10 +1573,6 @@ body {
     opacity: 1;
 
     transform: none;
-
-    /*
-     * Slightly slower smooth animation.
-     */
 
     transition:
         max-height 0.22s ease;
@@ -1729,7 +1722,7 @@ body {
 
     color: #8992a3;
 
-    font-size: 8px; /* FROMMMM 8 */
+    font-size: 8px;
 
     font-weight: 700;
 
@@ -2083,10 +2076,6 @@ body {
 
         max-height: 65px;
 
-        /*
-         * Same slightly slower animation on mobile.
-         */
-
         transition:
             max-height 0.22s ease;
     }
@@ -2285,11 +2274,13 @@ body {
     }
 }
 
+
+/* =========================================================
+   FINAL PERIOD VALUE SIZE
+   ========================================================= */
+
 .stock-period-value {
     font-size: 9px !important;
 }
 
-/* =========================================================
-   FINAL esssssssssss <!--/* 30TH AUG FINALl */-->
-
-   ========================================================= */
+/* PERFECT */
