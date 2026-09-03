@@ -1,4 +1,4 @@
-  const fromDate =
+const fromDate =
     document.getElementById("fromDate");
 
 const toDate =
@@ -85,17 +85,6 @@ let loadingMessageTimer = null;
    PAGINATION
    ========================================================= */
 
-/*
- * Number of shares displayed on one page.
- *
- * IMPORTANT:
- *
- * dividendData still contains ALL shares.
- *
- * Pagination only controls how many cards
- * are rendered on the screen.
- */
-
 const PAGE_SIZE = 30;
 
 let currentPage = 1;
@@ -113,6 +102,26 @@ let autoRefreshTimer = null;
 let autoRefreshing = false;
 
 let currentDataVersion = null;
+
+
+/* =========================================================
+   INITIAL LOAD STATE
+   ========================================================= */
+
+let initialLoad = true;
+
+let initialDataReady = false;
+
+
+/* =========================================================
+   PREVIOUS SUCCESSFUL DATA
+   ========================================================= */
+
+const LAST_SUCCESSFUL_DATA_KEY =
+    "lastSuccessfulDividendData";
+
+const LAST_SUCCESSFUL_VERSION_KEY =
+    "lastSuccessfulDividendVersion";
 
 
 /* =========================================================
@@ -156,6 +165,281 @@ function getFavoriteKey(stock) {
         stock.share_name ||
         ""
     ).trim();
+}
+
+
+/* =========================================================
+   SAVE LAST SUCCESSFUL DATA
+   ========================================================= */
+
+function saveLastSuccessfulDividendData(
+    data,
+    version
+) {
+
+    if (
+        !Array.isArray(data) ||
+        data.length === 0
+    ) {
+
+        return;
+    }
+
+
+    try {
+
+        localStorage.setItem(
+            LAST_SUCCESSFUL_DATA_KEY,
+            JSON.stringify(data)
+        );
+
+
+        if (
+            version !== null &&
+            version !== undefined
+        ) {
+
+            localStorage.setItem(
+                LAST_SUCCESSFUL_VERSION_KEY,
+                String(version)
+            );
+        }
+
+    } catch (e) {
+
+        console.warn(
+            "Unable to save previous dividend data:",
+            e
+        );
+    }
+}
+
+
+/* =========================================================
+   LOAD LAST SUCCESSFUL DATA
+   ========================================================= */
+
+function loadLastSuccessfulDividendData() {
+
+    try {
+
+        const savedData =
+            localStorage.getItem(
+                LAST_SUCCESSFUL_DATA_KEY
+            );
+
+
+        if (!savedData) {
+
+            return null;
+        }
+
+
+        const parsed =
+            JSON.parse(savedData);
+
+
+        if (
+            !Array.isArray(parsed) ||
+            parsed.length === 0
+        ) {
+
+            return null;
+        }
+
+
+        return parsed;
+
+    } catch (e) {
+
+        console.warn(
+            "Unable to load previous dividend data:",
+            e
+        );
+
+
+        return null;
+    }
+}
+
+
+/* =========================================================
+   LOAD LAST SUCCESSFUL VERSION
+   ========================================================= */
+
+function loadLastSuccessfulVersion() {
+
+    try {
+
+        const version =
+            localStorage.getItem(
+                LAST_SUCCESSFUL_VERSION_KEY
+            );
+
+
+        if (
+            version === null ||
+            version === undefined ||
+            version === ""
+        ) {
+
+            return null;
+        }
+
+
+        return String(version);
+
+    } catch (e) {
+
+        return null;
+    }
+}
+
+
+/* =========================================================
+   RESTORE PREVIOUS BROWSER DATA
+   ========================================================= */
+
+function restorePreviousDividendData() {
+
+    const previousData =
+        loadLastSuccessfulDividendData();
+
+
+    if (
+        !Array.isArray(previousData) ||
+        previousData.length === 0
+    ) {
+
+        return false;
+    }
+
+
+    /*
+     * IMPORTANT:
+     *
+     * Restore the previous successful data
+     * BEFORE making any API request.
+     */
+
+    dividendData =
+        previousData;
+
+
+    currentPage = 1;
+
+
+    /*
+     * Restore the version that produced this data.
+     *
+     * This is important because if the backend has
+     * already moved to a newer version, automatic
+     * refresh must detect that difference.
+     */
+
+    const previousVersion =
+        loadLastSuccessfulVersion();
+
+
+    if (
+        previousVersion !== null
+    ) {
+
+        currentDataVersion =
+            previousVersion;
+    }
+
+
+    /*
+     * Immediately render the previous data.
+     */
+
+    sortStocks();
+
+
+    return true;
+}
+
+
+/* =========================================================
+   INITIAL WAITING STATE
+   =========================================================
+ *
+ * This is ONLY used when:
+ *
+ * - Initial page load
+ * - No previous browser data exists
+ * - We are waiting for the backend to produce records
+ *
+ * IMPORTANT:
+ *
+ * We use the user's requested text:
+ *
+ * "Please wait while fetching the result..."
+ */
+
+function showInitialWaitingState() {
+
+    if (!loading) {
+        return;
+    }
+
+
+    stopLoadingAnimation();
+
+
+    loading.classList.remove(
+        "hidden"
+    );
+
+
+    if (loadingMessage) {
+
+        loadingMessage.textContent =
+            "Please wait while fetching the result...";
+
+
+        loadingMessage.style.opacity =
+            "1";
+    }
+}
+
+
+/* =========================================================
+   HIDE INITIAL WAITING STATE
+   ========================================================= */
+
+function hideInitialWaitingState() {
+
+    stopLoadingAnimation();
+
+
+    if (loadingMessage) {
+
+        /*
+         * Explicitly clear the waiting text.
+         *
+         * This prevents the old
+         * "Please wait while fetching the result..."
+         * message from remaining visible after data
+         * has already been restored/rendered.
+         */
+
+        loadingMessage.textContent =
+            "";
+
+
+        loadingMessage.style.opacity =
+            "1";
+    }
+
+
+    if (loading) {
+
+        loading.classList.add(
+            "hidden"
+        );
+    }
 }
 
 
@@ -760,12 +1044,9 @@ sortFilter.addEventListener(
         currentSort =
             sortFilter.value;
 
-        /*
-         * Whenever the user changes the
-         * sorting/filter, start from page 1.
-         */
 
         currentPage = 1;
+
 
         sortStocks();
     }
@@ -791,17 +1072,6 @@ function goToPage(page) {
     }
 
 
-    /*
-     * We calculate the number of pages
-     * from the currently visible dataset.
-     *
-     * The actual filtered/sorted dataset
-     * is prepared by sortStocks().
-     *
-     * renderStocks() will also protect
-     * against an invalid page.
-     */
-
     currentPage =
         Math.floor(
             requestedPage
@@ -811,19 +1081,11 @@ function goToPage(page) {
     sortStocks();
 
 
-    /*
-     * Move the user back to the beginning
-     * of the stock list after changing page.
-     *
-     * We do not force the very top of the
-     * entire page because the sticky filter
-     * should remain useful.
-     */
-
     if (stockList) {
 
         const rect =
             stockList.getBoundingClientRect();
+
 
         const scrollTop =
             window.scrollY +
@@ -1114,6 +1376,457 @@ async function getBackendVersion() {
 
 
 /* =========================================================
+   INITIAL LOAD
+   ========================================================= */
+
+async function initialLoadDividends() {
+
+    /*
+     * -----------------------------------------------------
+     * STEP 1
+     * -----------------------------------------------------
+     *
+     * Restore browser data immediately.
+     */
+
+    const hasPreviousData =
+        restorePreviousDividendData();
+
+
+    let dates;
+
+
+    try {
+
+        dates =
+            resolveDates();
+
+    } catch (e) {
+
+        /*
+         * If previous data exists, keep it visible.
+         */
+
+        if (
+            hasPreviousData
+        ) {
+
+            hideInitialWaitingState();
+
+        } else {
+
+            showInitialWaitingState();
+        }
+
+
+        initialLoad =
+            false;
+
+
+        return;
+    }
+
+
+    /*
+     * Keep date inputs synchronized.
+     */
+
+    fromDate.value =
+        dates.from;
+
+
+    toDate.value =
+        dates.to;
+
+
+    updateDateDisplays();
+
+
+    /*
+     * -----------------------------------------------------
+     * IMPORTANT FIX
+     * -----------------------------------------------------
+     *
+     * If browser data already exists:
+     *
+     * - Render it
+     * - Hide loading immediately
+     * - Do NOT show:
+     *   "Please wait while fetching the result..."
+     *
+     * The API request below is completely silent.
+     */
+
+    if (
+        hasPreviousData
+    ) {
+
+        initialDataReady =
+            true;
+
+
+        clearMessages();
+
+
+        /*
+         * Make sure the top filter summary is also
+         * updated immediately, just like after Search.
+         */
+
+        updateSummary(
+            currentInvestment,
+            dates
+        );
+
+
+        /*
+         * Explicitly hide the loading element.
+         *
+         * This is the important part that prevents
+         * the stale loading text from remaining visible.
+         */
+
+        hideInitialWaitingState();
+
+
+        /*
+         * Render again after the summary is updated.
+         */
+
+        sortStocks();
+
+    } else {
+
+        /*
+         * No previous browser data.
+         *
+         * Only now show:
+         *
+         * "Please wait while fetching the result..."
+         */
+
+        initialDataReady =
+            false;
+
+
+        currentDataVersion =
+            null;
+
+
+        showInitialWaitingState();
+    }
+
+
+    /*
+     * -----------------------------------------------------
+     * STEP 2
+     * -----------------------------------------------------
+     *
+     * Fetch backend data silently.
+     */
+
+    try {
+
+        let versionBefore =
+            null;
+
+
+        try {
+
+            versionBefore =
+                await getBackendVersion();
+
+        } catch (versionError) {
+
+            console.warn(
+                "Unable to get backend version during initial load:",
+                versionError
+            );
+        }
+
+
+        /*
+         * IMPORTANT:
+         *
+         * We DO NOT clear dividendData here.
+         *
+         * Therefore existing browser data remains visible
+         * while this request is running.
+         */
+
+        const data =
+            await fetchDividendData(
+                dates.from,
+                dates.to
+            );
+
+
+        /* =================================================
+           INITIAL + RECORDS
+           ================================================= */
+
+        if (
+            Array.isArray(data) &&
+            data.length > 0
+        ) {
+
+            /*
+             * New successful data replaces old browser data.
+             */
+
+            dividendData =
+                data;
+
+
+            initialDataReady =
+                true;
+
+
+            /*
+             * Confirm the version AFTER records are received.
+             */
+
+            let versionAfter =
+                versionBefore;
+
+
+            try {
+
+                versionAfter =
+                    await getBackendVersion();
+
+            } catch (versionError) {
+
+                console.warn(
+                    "Unable to get backend version after initial load:",
+                    versionError
+                );
+            }
+
+
+            /*
+             * Only save successful records.
+             */
+
+            saveLastSuccessfulDividendData(
+                data,
+                versionAfter
+            );
+
+
+            /*
+             * Use the latest confirmed version.
+             */
+
+            if (
+                versionAfter !== null &&
+                versionAfter !== undefined
+            ) {
+
+                currentDataVersion =
+                    String(versionAfter);
+            }
+
+
+            /*
+             * Update the top filter summary.
+             */
+
+            updateSummary(
+                currentInvestment,
+                dates
+            );
+
+
+            /*
+             * Render the new records.
+             */
+
+            sortStocks();
+
+
+            /*
+             * IMPORTANT:
+             *
+             * Explicitly remove the initial waiting message.
+             */
+
+            hideInitialWaitingState();
+
+
+            return;
+        }
+
+
+        /* =================================================
+           INITIAL + []
+           ================================================= */
+
+        if (
+            Array.isArray(data) &&
+            data.length === 0
+        ) {
+
+            console.log(
+                "Initial /api/dividends returned []."
+            );
+
+
+            /*
+             * -------------------------------------------------
+             * Previous browser data exists
+             * -------------------------------------------------
+             */
+
+            if (
+                hasPreviousData
+            ) {
+
+                /*
+                 * KEEP existing dividendData.
+                 *
+                 * Do NOT:
+                 *
+                 * dividendData = [];
+                 */
+
+                initialDataReady =
+                    true;
+
+
+                /*
+                 * IMPORTANT:
+                 *
+                 * Do NOT replace currentDataVersion with
+                 * versionBefore here.
+                 *
+                 * We must preserve the version belonging
+                 * to the browser data.
+                 *
+                 * If backend version is newer, the 5-second
+                 * automatic refresh will detect the change
+                 * and retry /api/dividends.
+                 */
+
+                clearMessages();
+
+
+                updateSummary(
+                    currentInvestment,
+                    dates
+                );
+
+
+                sortStocks();
+
+
+                /*
+                 * Most important:
+                 *
+                 * Keep loading text hidden.
+                 */
+
+                hideInitialWaitingState();
+
+
+            } else {
+
+                /*
+                 * -------------------------------------------------
+                 * No browser data exists
+                 * -------------------------------------------------
+                 *
+                 * API returned [].
+                 *
+                 * Keep waiting.
+                 */
+
+                initialDataReady =
+                    false;
+
+
+                currentDataVersion =
+                    null;
+
+
+                showInitialWaitingState();
+            }
+
+
+            return;
+        }
+
+    } catch (e) {
+
+        /*
+         * Initial API error.
+         *
+         * NEVER destroy existing browser data.
+         */
+
+        console.warn(
+            "Initial dividend load failed:",
+            e
+        );
+
+
+        if (
+            hasPreviousData
+        ) {
+
+            /*
+             * Existing data stays visible.
+             */
+
+            initialDataReady =
+                true;
+
+
+            clearMessages();
+
+
+            updateSummary(
+                currentInvestment,
+                dates
+            );
+
+
+            sortStocks();
+
+
+            /*
+             * Never leave the initial waiting message
+             * visible when we already have usable data.
+             */
+
+            hideInitialWaitingState();
+
+        } else {
+
+            /*
+             * Nothing to display yet.
+             */
+
+            initialDataReady =
+                false;
+
+
+            currentDataVersion =
+                null;
+
+
+            showInitialWaitingState();
+        }
+
+    } finally {
+
+        initialLoad =
+            false;
+    }
+}
+
+
+/* =========================================================
    SEARCH
    ========================================================= */
 
@@ -1121,12 +1834,6 @@ async function searchDividends() {
 
     clearMessages();
 
-
-    /*
-     * A new search represents a new result set.
-     *
-     * Always start from page 1.
-     */
 
     currentPage = 1;
 
@@ -1193,7 +1900,8 @@ async function searchDividends() {
 
     try {
 
-        let versionBeforeSearch = null;
+        let versionBeforeSearch =
+            null;
 
 
         try {
@@ -1217,7 +1925,8 @@ async function searchDividends() {
             );
 
 
-        let versionAfterSearch = null;
+        let versionAfterSearch =
+            null;
 
 
         try {
@@ -1250,11 +1959,20 @@ async function searchDividends() {
             );
 
 
-            finalData =
+            const latestData =
                 await fetchDividendData(
                     dates.from,
                     dates.to
                 );
+
+
+            if (
+                Array.isArray(latestData)
+            ) {
+
+                finalData =
+                    latestData;
+            }
 
 
             try {
@@ -1289,6 +2007,11 @@ async function searchDividends() {
         );
 
 
+        /*
+         * Manual Search intentionally replaces the
+         * currently displayed data.
+         */
+
         dividendData =
             finalData;
 
@@ -1305,15 +2028,26 @@ async function searchDividends() {
             "dividendDesc";
 
 
-        /*
-         * currentPage is already 1 because
-         * this is a new search.
-         */
-
         currentPage = 1;
 
 
         sortStocks();
+
+
+        /*
+         * Save only successful non-empty data.
+         */
+
+        if (
+            Array.isArray(finalData) &&
+            finalData.length > 0
+        ) {
+
+            saveLastSuccessfulDividendData(
+                finalData,
+                versionAfterSearch
+            );
+        }
 
 
         clearFilterError();
@@ -1335,6 +2069,10 @@ async function searchDividends() {
             currentDataVersion =
                 versionAfterSearch;
         }
+
+
+        initialDataReady =
+            true;
 
 
     } catch (e) {
@@ -1396,34 +2134,164 @@ async function autoRefreshDividends() {
     }
 
 
-    autoRefreshing = true;
+    autoRefreshing =
+        true;
 
 
     try {
+
+        /*
+         * =================================================
+         * INITIAL DATA NOT READY
+         * =================================================
+         *
+         * If we have no successful data yet, keep trying
+         * /api/dividends every 5 seconds.
+         */
+
+        if (
+            !initialDataReady
+        ) {
+
+            let backendVersion =
+                null;
+
+
+            try {
+
+                backendVersion =
+                    await getBackendVersion();
+
+            } catch (versionError) {
+
+                console.warn(
+                    "Unable to get version while preparing initial data:",
+                    versionError
+                );
+            }
+
+
+            const initialData =
+                await fetchDividendData(
+                    fromDate.value,
+                    toDate.value
+                );
+
+
+            if (
+                Array.isArray(initialData) &&
+                initialData.length > 0
+            ) {
+
+                dividendData =
+                    initialData;
+
+
+                initialDataReady =
+                    true;
+
+
+                if (
+                    backendVersion !== null
+                ) {
+
+                    currentDataVersion =
+                        backendVersion;
+
+                } else {
+
+                    try {
+
+                        currentDataVersion =
+                            await getBackendVersion();
+
+                    } catch (versionError) {
+
+                        console.warn(
+                            "Unable to confirm initial dividend version:",
+                            versionError
+                        );
+                    }
+                }
+
+
+                saveLastSuccessfulDividendData(
+                    initialData,
+                    currentDataVersion
+                );
+
+
+                updateSummary(
+                    currentInvestment,
+                    {
+                        from:
+                            fromDate.value,
+
+                        to:
+                            toDate.value
+                    }
+                );
+
+
+                sortStocks();
+
+
+                hideInitialWaitingState();
+
+            } else {
+
+                /*
+                 * Still no records.
+                 *
+                 * Keep waiting.
+                 */
+
+                showInitialWaitingState();
+            }
+
+
+            return;
+        }
+
+
+        /* =================================================
+           GET CURRENT BACKEND VERSION
+           ================================================= */
 
         const backendVersion =
             await getBackendVersion();
 
 
-        if (
-            currentDataVersion === null
-        ) {
+        /* =================================================
+           SAME VERSION
+           =================================================
+         *
+         * EXACT RULE:
+         *
+         * Same + Any
+         *     -> Do nothing
+         */
 
-            currentDataVersion =
-                backendVersion;
+        if (
+            currentDataVersion ===
+            backendVersion
+        ) {
 
             return;
         }
 
 
-        if (
-            backendVersion ===
-            currentDataVersion
-        ) {
-
-            return;
-        }
-
+        /* =================================================
+           VERSION CHANGED
+           =================================================
+         *
+         * Backend version changed.
+         *
+         * Now request the actual dividend data.
+         *
+         * Existing cards remain untouched while the
+         * request is loading.
+         */
 
         const data =
             await fetchDividendData(
@@ -1431,6 +2299,54 @@ async function autoRefreshDividends() {
                 toDate.value
             );
 
+
+        /* =================================================
+           CHANGED + []
+           =================================================
+         *
+         * EXACT RULE:
+         *
+         * Changed + []
+         *     -> Ignore
+         *
+         * Do NOT:
+         *
+         * - clear dividendData
+         * - render empty
+         * - update currentDataVersion
+         */
+
+        if (
+            !Array.isArray(data) ||
+            data.length === 0
+        ) {
+
+            console.log(
+                "Backend version changed but API returned []. Keeping existing data."
+            );
+
+
+            return;
+        }
+
+
+        /* =================================================
+           CHANGED + RECORDS
+           =================================================
+         *
+         * EXACT RULE:
+         *
+         * Changed + Records
+         *     -> Replace data
+         */
+
+        dividendData =
+            data;
+
+
+        /*
+         * Confirm version after receiving records.
+         */
 
         let confirmedVersion =
             backendVersion;
@@ -1444,14 +2360,10 @@ async function autoRefreshDividends() {
         } catch (versionError) {
 
             console.warn(
-                "Unable to confirm dividend version after automatic refresh:",
+                "Unable to confirm dividend version:",
                 versionError
             );
         }
-
-
-        dividendData =
-            data;
 
 
         currentDataVersion =
@@ -1459,27 +2371,34 @@ async function autoRefreshDividends() {
 
 
         /*
-         * IMPORTANT:
+         * Save successful data.
+         */
+
+        saveLastSuccessfulDividendData(
+            data,
+            confirmedVersion
+        );
+
+
+        /*
+         * Preserve:
          *
-         * Do not reset:
-         *
-         * currentPage
-         * currentSort
-         * currentInvestment
-         * favorites
-         * sortFilter.value
-         *
-         * Existing UI state remains intact.
-         *
-         * If the new data has fewer pages,
-         * renderStocks() will automatically
-         * move currentPage to the last valid page.
+         * - currentSort
+         * - currentInvestment
+         * - favorites
+         * - currentPage
          */
 
         sortStocks();
 
 
     } catch (e) {
+
+        /*
+         * Automatic refresh errors remain silent.
+         *
+         * Existing data remains visible.
+         */
 
         console.warn(
             "Automatic dividend version check failed:",
@@ -1488,7 +2407,8 @@ async function autoRefreshDividends() {
 
     } finally {
 
-        autoRefreshing = false;
+        autoRefreshing =
+            false;
     }
 }
 
@@ -1499,7 +2419,9 @@ async function autoRefreshDividends() {
 
 function startAutomaticRefresh() {
 
-    if (autoRefreshTimer !== null) {
+    if (
+        autoRefreshTimer !== null
+    ) {
 
         clearInterval(
             autoRefreshTimer
@@ -1891,10 +2813,6 @@ function sortStocks() {
         "favorites"
     ) {
 
-        /*
-         * First keep only favorites.
-         */
-
         sortedData =
             sortedData.filter(
                 function(stock) {
@@ -1905,16 +2823,6 @@ function sortStocks() {
                 }
             );
 
-
-        /*
-         * IMPORTANT:
-         *
-         * Favorites ALWAYS use
-         * Expected Dividend HIGH -> LOW.
-         *
-         * This intentionally ignores
-         * dividendAsc/dateAsc.
-         */
 
         sortedData.sort(
             function(a, b) {
@@ -1979,16 +2887,6 @@ function sortStocks() {
         );
     }
 
-
-    /*
-     * IMPORTANT:
-     *
-     * sortedData = COMPLETE list
-     * after filtering and sorting.
-     *
-     * renderStocks() is responsible for
-     * displaying only the current 50 records.
-     */
 
     renderStocks(
         sortedData,
@@ -2845,12 +3743,6 @@ async function refreshDividends() {
 
         /*
          * Pull-to-refresh remains a MANUAL refresh.
-         *
-         * It intentionally uses the existing search
-         * behavior, including its sorting reset.
-         *
-         * searchDividends() also resets pagination
-         * to page 1 because this is a fresh search.
          */
 
         await searchDividends();
@@ -2888,9 +3780,7 @@ async function refreshDividends() {
 
 
 /* =========================================================
-   INITIAL SEARCH
+   INITIAL PAGE LOAD
    ========================================================= */
 
-searchDividends();
-
-<!--/* 30TH AUG FINAlL */-->
+initialLoadDividends();
