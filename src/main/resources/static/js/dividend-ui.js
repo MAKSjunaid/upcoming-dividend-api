@@ -1,9 +1,8 @@
-
 /* =========================================================
    DIVIDEND UI RENDERING
    =========================================================
  *
- * This file ONLY handles rendering the dividend cards..
+ * This file ONLY handles rendering the dividend cards.
  *
  * It does NOT:
  *
@@ -263,11 +262,6 @@ function ensureFavoriteBurstCSS() {
             }
 
 
-            /*
-             * The star remains visible briefly,
-             * then disappears as if breaking apart.
-             */
-
             65% {
 
                 opacity: 1;
@@ -320,11 +314,6 @@ function ensureFavoriteBurstCSS() {
             }
 
 
-            /*
-             * Pieces appear at the moment
-             * the original star breaks.
-             */
-
             15% {
 
                 opacity: 1;
@@ -342,30 +331,17 @@ function ensureFavoriteBurstCSS() {
             }
 
 
-            /*
-             * Stay visible while slowly
-             * moving upward.
-             */
-
             55% {
 
                 opacity: 0.85;
             }
 
 
-            /*
-             * Start fading.
-             */
-
             78% {
 
                 opacity: 0.55;
             }
 
-
-            /*
-             * Finish high above the button.
-             */
 
             100% {
 
@@ -396,6 +372,121 @@ function ensureFavoriteBurstCSS() {
             opacity: 0 !important;
 
             pointer-events: none !important;
+        }
+
+
+        /* =================================================
+           CURRENT PRICE + PERCENTAGE
+           =================================================
+         *
+         * IMPORTANT:
+         *
+         * .current-price-row keeps the current price
+         * and percentage on the SAME LINE.
+         *
+         * .metric-value itself still contains ONLY
+         * the current price.
+         *
+         * This protects stock-details.js.
+         */
+
+        .current-price-row {
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: flex-start;
+
+            gap: 6px;
+
+            white-space: nowrap;
+        }
+
+
+        /*
+         * Price movement percentage.
+         */
+
+        .price-change {
+
+            display: inline-flex;
+
+            align-items: center;
+
+            gap: 2px;
+
+            font-size: 0.82em;
+
+            line-height: 1;
+
+            font-weight: 600;
+
+            white-space: nowrap;
+
+            vertical-align: middle;
+        }
+
+
+        /*
+         * Up movement.
+         */
+
+        .price-change-up {
+
+            color: #188038;
+        }
+
+
+        /*
+         * Down movement.
+         */
+
+        .price-change-down {
+
+            color: #d93025;
+        }
+
+
+        /*
+         * No movement.
+         */
+
+        .price-change-neutral {
+
+            color: #5f6368;
+        }
+
+
+        /*
+         * Google-style movement arrow.
+         */
+
+        .price-change-arrow {
+
+            display: inline-flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            width: 16px;
+
+            height: 16px;
+
+            line-height: 16px;
+        }
+
+
+        .price-change-arrow svg {
+
+            width: 16px;
+
+            height: 16px;
+
+            display: block;
+
+            fill: currentColor;
         }
 
     `;
@@ -429,11 +520,6 @@ function createFavoriteStarFragment(
         "favorite-star-fragment";
 
 
-    /*
-     * Pieces begin very close to
-     * the original star.
-     */
-
     const startX =
         (
             Math.random() *
@@ -449,16 +535,6 @@ function createFavoriteStarFragment(
         ) -
         11;
 
-
-    /*
-     * IMPORTANT:
-     *
-     * Pieces move mostly UP.
-     *
-     * Horizontal movement is intentionally
-     * limited so it does not look like an
-     * explosion.
-     */
 
     const endX =
         (
@@ -528,11 +604,6 @@ function createFavoriteStarFragment(
     );
 
 
-    /*
-     * Pieces start at slightly different
-     * times so the break looks natural.
-     */
-
     const delay =
         Math.random() *
         220;
@@ -541,10 +612,6 @@ function createFavoriteStarFragment(
     fragment.style.animationDelay =
         `${delay}ms`;
 
-
-    /*
-     * Random fragment size.
-     */
 
     const size =
         4 +
@@ -559,11 +626,6 @@ function createFavoriteStarFragment(
     fragment.style.height =
         `${size}px`;
 
-
-    /*
-     * Different geometric shapes make
-     * the pieces look broken.
-     */
 
     const shape =
         Math.floor(
@@ -631,11 +693,6 @@ function playFavoriteStarBurst(
     ensureFavoriteBurstCSS();
 
 
-    /*
-     * Find exact position of the
-     * favorite button.
-     */
-
     const rect =
         favoriteButton.getBoundingClientRect();
 
@@ -651,10 +708,6 @@ function playFavoriteStarBurst(
         rect.height /
         2;
 
-
-    /*
-     * Create animation container.
-     */
 
     const container =
         document.createElement(
@@ -679,10 +732,6 @@ function playFavoriteStarBurst(
     );
 
 
-    /* =====================================================
-       ONE ORIGINAL STAR
-       ===================================================== */
-
     const mainStar =
         document.createElement(
             "span"
@@ -702,15 +751,6 @@ function playFavoriteStarBurst(
     );
 
 
-    /* =====================================================
-       CREATE BROKEN PIECES
-       =====================================================
-     *
-     * These are small geometric fragments.
-     *
-     * They are NOT additional stars.
-     */
-
     const fragmentCount =
         65;
 
@@ -726,11 +766,6 @@ function playFavoriteStarBurst(
         );
     }
 
-
-    /*
-     * Remove the animation after
-     * the complete 3-second animation.
-     */
 
     setTimeout(
         function() {
@@ -772,10 +807,6 @@ function startFavoriteButtonCooldown(
         window.__favoriteBurstState.cooldowns;
 
 
-    /*
-     * Clear any existing timer.
-     */
-
     const existingTimer =
         cooldowns.get(
             favoriteKey
@@ -792,18 +823,10 @@ function startFavoriteButtonCooldown(
     }
 
 
-    /*
-     * Hide button immediately.
-     */
-
     favoriteButton.classList.add(
         "favorite-burst-cooldown"
     );
 
-
-    /*
-     * Keep it hidden for 8 seconds.
-     */
 
     const timer =
         setTimeout(
@@ -813,10 +836,6 @@ function startFavoriteButtonCooldown(
                     favoriteKey
                 );
 
-
-                /*
-                 * The card may still exist.
-                 */
 
                 if (
                     favoriteButton &&
@@ -910,10 +929,6 @@ function recordFavoriteClick(
     }
 
 
-    /*
-     * Remove clicks older than 4 seconds.
-     */
-
     timestamps =
         timestamps.filter(
             function(timestamp) {
@@ -927,10 +942,6 @@ function recordFavoriteClick(
         );
 
 
-    /*
-     * Record current click.
-     */
-
     timestamps.push(
         now
     );
@@ -942,38 +953,20 @@ function recordFavoriteClick(
     );
 
 
-    /*
-     * 15 operations within 4 seconds.
-     */
-
     if (
         timestamps.length >=
         FAVORITE_BURST_CLICK_LIMIT
     ) {
-
-        /*
-         * Reset immediately.
-         *
-         * This allows another burst later.
-         */
 
         clicks.delete(
             favoriteKey
         );
 
 
-        /*
-         * Play the broken-star animation.
-         */
-
         playFavoriteStarBurst(
             favoriteButton
         );
 
-
-        /*
-         * Hide the button for 8 seconds.
-         */
 
         startFavoriteButtonCooldown(
             favoriteButton,
@@ -1207,14 +1200,6 @@ function renderPagination(
     }
 
 
-    /*
-     * Safety:
-     *
-     * If automatic refresh causes the
-     * number of pages to decrease,
-     * make sure currentPage remains valid.
-     */
-
     if (
         currentPage >
         totalPages
@@ -1254,15 +1239,6 @@ function renderPagination(
     );
 
 
-    /*
-     * For your current 300+ shares this will normally
-     * produce around 6-7 page buttons.
-     *
-     * The logic below also keeps the UI manageable
-     * if the dataset becomes much larger later.
-     */
-
-
     if (
         totalPages <= 7
     ) {
@@ -1285,10 +1261,6 @@ function renderPagination(
 
     } else {
 
-        /*
-         * Always show page 1.
-         */
-
         pagination.appendChild(
             createPaginationButton(
                 "1",
@@ -1298,10 +1270,6 @@ function renderPagination(
             )
         );
 
-
-        /*
-         * Left ellipsis.
-         */
 
         if (
             currentPage > 4
@@ -1326,10 +1294,6 @@ function renderPagination(
             );
         }
 
-
-        /*
-         * Pages around the current page.
-         */
 
         let startPage =
             Math.max(
@@ -1394,10 +1358,6 @@ function renderPagination(
         }
 
 
-        /*
-         * Right ellipsis.
-         */
-
         if (
             currentPage <
             totalPages - 3
@@ -1422,10 +1382,6 @@ function renderPagination(
             );
         }
 
-
-        /*
-         * Always show the last page.
-         */
 
         pagination.appendChild(
             createPaginationButton(
@@ -1603,10 +1559,6 @@ function renderStocks(
         );
 
 
-    /*
-     * Protect against an invalid current page.
-     */
-
     if (
         currentPage >
         totalPages
@@ -1671,6 +1623,192 @@ function renderStocks(
                 Number(
                     stock.dividend_amount
                 );
+
+
+            /* =================================================
+               PREVIOUS SHARE PRICE
+               ================================================= */
+
+            const previousPrice =
+                Number(
+                    stock.previous_share_price
+                );
+
+
+            /* =================================================
+               CURRENT PRICE CHANGE %
+               =================================================
+             *
+             * Formula:
+             *
+             * ((current - previous) / previous) * 100
+             *
+             * Example:
+             *
+             * Previous = 401.60
+             * Current  = 417.85
+             *
+             * Result = +4.05%
+             */
+
+            let priceChangePercentage =
+                null;
+
+
+            let priceChangeClass =
+                "";
+
+
+            let priceChangeText =
+                "";
+
+
+            let priceChangeArrow =
+                "";
+
+
+            if (
+                !isNaN(price) &&
+                price > 0 &&
+                !isNaN(previousPrice) &&
+                previousPrice > 0
+            ) {
+
+                priceChangePercentage =
+                    (
+                        (
+                            price -
+                            previousPrice
+                        ) /
+                        previousPrice
+                    ) *
+                    100;
+
+
+                /*
+                 * Prevent -0.00%.
+                 */
+
+                if (
+                    Math.abs(
+                        priceChangePercentage
+                    ) < 0.005
+                ) {
+
+                    priceChangePercentage =
+                        0;
+                }
+
+
+                if (
+                    priceChangePercentage > 0
+                ) {
+
+                    priceChangeClass =
+                        "price-change-up";
+
+
+                    priceChangeText =
+                        `${priceChangePercentage.toFixed(2)}%`;
+
+
+                    /*
+                     * Up arrow.
+                     *
+                     * Same visual direction as
+                     * the Google example.
+                     */
+
+                    priceChangeArrow = `
+
+                        <span
+                            class="price-change-arrow"
+                            aria-hidden="true"
+                        >
+
+                            <svg
+                                focusable="false"
+                                aria-hidden="true"
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 24 24"
+                            >
+
+                                <path
+                                    d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"
+                                ></path>
+
+                            </svg>
+
+                        </span>
+                    `;
+
+                } else if (
+                    priceChangePercentage < 0
+                ) {
+
+                    priceChangeClass =
+                        "price-change-down";
+
+
+                    priceChangeText =
+                        `${Math.abs(
+                            priceChangePercentage
+                        ).toFixed(2)}%`;
+
+
+                    /*
+                     * Down arrow.
+                     */
+
+                    priceChangeArrow = `
+
+                        <span
+                            class="price-change-arrow"
+                            aria-hidden="true"
+                        >
+
+                            <svg
+                                focusable="false"
+                                aria-hidden="true"
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 24 24"
+                            >
+
+                                <path
+                                    d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.58L4 12l8 8 8-8z"
+                                ></path>
+
+                            </svg>
+
+                        </span>
+                    `;
+
+                } else {
+
+                    priceChangeClass =
+                        "price-change-neutral";
+
+
+                    priceChangeText =
+                        "0.00%";
+
+
+                    /*
+                     * No movement:
+                     * use a simple neutral dot.
+                     */
+
+                    priceChangeArrow = `
+
+                        <span
+                            class="price-change-arrow"
+                            aria-hidden="true"
+                        >
+                            •
+                        </span>
+                    `;
+                }
+            }
 
 
             let shares = 1;
@@ -1932,13 +2070,62 @@ function renderStocks(
 
                     <div class="metric">
 
-                        <div class="metric-value">
+                        <!--
+                         * IMPORTANT:
+                         *
+                         * Keep .metric-value ONLY
+                         * for the current price.
+                         *
+                         * The percentage is deliberately
+                         * OUTSIDE .metric-value.
+                         *
+                         * This prevents the percentage
+                         * from interfering with the
+                         * existing stock-details.js
+                         * current-price extraction.
+                         -->
 
-                            📈
+                        <div class="current-price-row">
+
+                            <div class="metric-value">
+
+                                📈
+                                ${
+                                    formatMoney(
+                                        stock.current_share_price
+                                    )
+                                }
+
+                            </div>
+
+
                             ${
-                                formatMoney(
-                                    stock.current_share_price
-                                )
+                                priceChangeText
+                                    ? `
+
+                                        <span
+                                            class="price-change ${priceChangeClass}"
+                                            aria-label="${
+                                                priceChangePercentage > 0
+                                                    ? "Up by "
+                                                    : priceChangePercentage < 0
+                                                        ? "Down by "
+                                                        : "No change "
+                                            }${priceChangeText}"
+                                        >
+
+                                            ${priceChangeArrow}
+
+                                            <span>
+
+                                                ${priceChangeText}
+
+                                            </span>
+
+                                        </span>
+
+                                      `
+                                    : ""
                             }
 
                         </div>
