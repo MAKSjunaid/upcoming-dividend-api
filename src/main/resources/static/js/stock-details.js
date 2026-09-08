@@ -2,8 +2,8 @@
    STOCK DETAILS
    =========================================================
  *
- * This file ONLY handles clicking a stock card andd
- * displaying stock historical return data..
+ * This file ONLY handles clicking a stock card and
+ * displaying stock historical return data.
  *
  * It does NOT:
  *
@@ -51,6 +51,17 @@
 
 const STOCK_DETAILS_API =
     "/api/stock-details";
+
+
+/*
+ * Duration of the percentage count-up animation.
+ *
+ * This matches the 3.28s visual animation already
+ * configured in your CSS.
+ */
+
+const STOCK_DETAILS_COUNT_DURATION =
+    1280; /* 3280 */
 
 
 /* =========================================================
@@ -242,14 +253,6 @@ function openStockDetails(
 
     if (existingDetails) {
 
-        /*
-         * Simply restore visibility.
-         *
-         * No movement.
-         * No height animation.
-         * No transform.
-         */
-
         existingDetails.classList.add(
             "open"
         );
@@ -277,151 +280,290 @@ function openStockDetails(
 
 
     /*
-     * Stock Performance heading.
+     * Stock Performance heading
+     * and horizontal performance chart.
      */
 
     detailsPanel.innerHTML = `
 
-       <div class="stock-performance-title">
+        <div class="stock-performance-title">
             Stock Performance
         </div>
 
 
-        <div class="stock-details-periods">
+        <div class="stock-details-chart">
 
+            <!-- 5D -->
 
-            <!-- 5Y -->
+            <div
+                class="stock-performance-row"
+                data-period-row="5D"
+            >
 
-            <div class="stock-period-box">
+                <div
+                    class="stock-performance-period"
+                >
+                    5D
+                </div>
 
-                <span class="stock-period-label">
-                    5Y:
-                </span>
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="5D"
+                ></div>
 
-                <span
-                    class="stock-period-value"
-                    data-period-value="5Y">
+                <div class="stock-performance-track">
 
-                    —
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
 
-                </span>
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="5D"
+                    ></div>
 
-            </div>
+                </div>
 
-
-            <!-- 3Y -->
-
-            <div class="stock-period-box">
-
-                <span class="stock-period-label">
-                    3Y:
-                </span>
-
-                <span
-                    class="stock-period-value"
-                    data-period-value="3Y">
-
-                    —
-
-                </span>
-
-            </div>
-
-
-            <!-- 1Y -->
-
-            <div class="stock-period-box">
-
-                <span class="stock-period-label">
-                    1Y:
-                </span>
-
-                <span
-                    class="stock-period-value"
-                    data-period-value="1Y">
-
-                    —
-
-                </span>
-
-            </div>
-
-
-            <!-- 6M -->
-
-            <div class="stock-period-box">
-
-                <span class="stock-period-label">
-                    6M:
-                </span>
-
-                <span
-                    class="stock-period-value"
-                    data-period-value="6M">
-
-                    —
-
-                </span>
-
-            </div>
-
-
-            <!-- 3M -->
-
-            <div class="stock-period-box">
-
-                <span class="stock-period-label">
-                    3M:
-                </span>
-
-                <span
-                    class="stock-period-value"
-                    data-period-value="3M">
-
-                    —
-
-                </span>
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="5D"
+                ></div>
 
             </div>
 
 
             <!-- 1M -->
 
-            <div class="stock-period-box">
+            <div
+                class="stock-performance-row"
+                data-period-row="1M"
+            >
 
-                <span class="stock-period-label">
-                    1M:
-                </span>
+                <div
+                    class="stock-performance-period"
+                >
+                    1M
+                </div>
 
-                <span
-                    class="stock-period-value"
-                    data-period-value="1M">
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="1M"
+                ></div>
 
-                    —
+                <div class="stock-performance-track">
 
-                </span>
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="1M"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="1M"
+                ></div>
 
             </div>
 
 
-            <!-- 5D -->
+            <!-- 3M -->
 
-            <div class="stock-period-box">
+            <div
+                class="stock-performance-row"
+                data-period-row="3M"
+            >
 
-                <span class="stock-period-label">
-                    5D:
-                </span>
+                <div
+                    class="stock-performance-period"
+                >
+                    3M
+                </div>
 
-                <span
-                    class="stock-period-value"
-                    data-period-value="5D">
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="3M"
+                ></div>
 
-                    —
+                <div class="stock-performance-track">
 
-                </span>
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="3M"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="3M"
+                ></div>
 
             </div>
 
+
+            <!-- 6M -->
+
+            <div
+                class="stock-performance-row"
+                data-period-row="6M"
+            >
+
+                <div
+                    class="stock-performance-period"
+                >
+                    6M
+                </div>
+
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="6M"
+                ></div>
+
+                <div class="stock-performance-track">
+
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="6M"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="6M"
+                ></div>
+
+            </div>
+
+
+            <!-- 1Y -->
+
+            <div
+                class="stock-performance-row"
+                data-period-row="1Y"
+            >
+
+                <div
+                    class="stock-performance-period"
+                >
+                    1Y
+                </div>
+
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="1Y"
+                ></div>
+
+                <div class="stock-performance-track">
+
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="1Y"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="1Y"
+                ></div>
+
+            </div>
+
+
+            <!-- 3Y -->
+
+            <div
+                class="stock-performance-row"
+                data-period-row="3Y"
+            >
+
+                <div
+                    class="stock-performance-period"
+                >
+                    3Y
+                </div>
+
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="3Y"
+                ></div>
+
+                <div class="stock-performance-track">
+
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="3Y"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="3Y"
+                ></div>
+
+            </div>
+
+
+            <!-- 5Y -->
+
+            <div
+                class="stock-performance-row"
+                data-period-row="5Y"
+            >
+
+                <div
+                    class="stock-performance-period"
+                >
+                    5Y
+                </div>
+
+                <div
+                    class="stock-performance-value-left"
+                    data-period-value-left="5Y"
+                ></div>
+
+                <div class="stock-performance-track">
+
+                    <div
+                        class="stock-performance-zero"
+                    ></div>
+
+                    <div
+                        class="stock-performance-candle"
+                        data-period-candle="5Y"
+                    ></div>
+
+                </div>
+
+                <div
+                    class="stock-performance-value-right"
+                    data-period-value-right="5Y"
+                ></div>
+
+            </div>
 
         </div>
 
@@ -455,10 +597,6 @@ function openStockDetails(
 
     /*
      * Allow CSS opening animation.
-     *
-     * Only opacity changes.
-     *
-     * The panel itself does NOT move.
      */
 
     requestAnimationFrame(
@@ -528,45 +666,19 @@ function closeStockDetails(
 
 
     /*
-     * =====================================================
-     * IMPORTANT CLOSING BEHAVIOR
-     * =====================================================
-     *
-     * We ONLY remove the "open" class.
-     *
-     * CSS changes ONLY opacity.
-     *
-     * The panel does NOT:
-     *
-     * - move
-     * - translate
-     * - scale
-     * - change height
-     * - change padding
-     * - change margin
-     *
-     * Therefore the panel stays exactly where it is
-     * while disappearing.
+     * Stop any percentage count-up
+     * animations running inside this panel.
      */
+
+    stopPerformanceCountAnimations(
+        detailsPanel
+    );
+
 
     detailsPanel.classList.remove(
         "open"
     );
 
-
-    /*
-     * Wait for the opacity animation to finish.
-     *
-     * CSS transition:
-     *
-     * 160ms
-     *
-     * We wait 180ms.
-     *
-     * The panel remains in the document during
-     * this time, so the stock card does not
-     * immediately change its layout.
-     */
 
     setTimeout(
         function() {
@@ -583,10 +695,6 @@ function closeStockDetails(
         180
     );
 
-
-    /*
-     * Clear current card.
-     */
 
     if (
         currentlyOpenStockDetails ===
@@ -616,13 +724,33 @@ async function loadStockDetails(
 
 
     /*
-     * Find all period values.
+     * Find all performance values.
      */
 
     const periodValues =
         detailsPanel.querySelectorAll(
-            ".stock-period-value"
+            ".stock-performance-value-left, " +
+            ".stock-performance-value-right"
         );
+
+
+    /*
+     * Find all candles.
+     */
+
+    const periodCandles =
+        detailsPanel.querySelectorAll(
+            ".stock-performance-candle"
+        );
+
+
+    /*
+     * Stop any previous count animations.
+     */
+
+    stopPerformanceCountAnimations(
+        detailsPanel
+    );
 
 
     /*
@@ -637,8 +765,29 @@ async function loadStockDetails(
 
             element.classList.remove(
                 "positive",
-                "negative"
+                "negative",
+                "neutral"
             );
+
+            element.style.left =
+                "33px";
+
+        }
+    );
+
+
+    periodCandles.forEach(
+        function(element) {
+
+            element.classList.remove(
+                "positive",
+                "negative",
+                "neutral",
+                "visible"
+            );
+
+            element.style.width =
+                "0%";
 
         }
     );
@@ -772,6 +921,37 @@ async function loadStockDetails(
                     "negative"
                 );
 
+                element.classList.add(
+                    "neutral"
+                );
+
+                element.style.left =
+                    "40px";
+
+            }
+        );
+
+
+        /*
+         * Reset candles when API fails.
+         */
+
+        periodCandles.forEach(
+            function(element) {
+
+                element.classList.remove(
+                    "positive",
+                    "negative",
+                    "visible"
+                );
+
+                element.classList.add(
+                    "neutral"
+                );
+
+                element.style.width =
+                    "0%";
+
             }
         );
 
@@ -847,12 +1027,6 @@ function getCurrentPriceFromCard(
                 return null;
             }
 
-
-            /*
-             * Example:
-             *
-             * 📈 ₹39.29
-             */
 
             const rawText =
                 valueElement.textContent
@@ -947,41 +1121,31 @@ function renderStockDetails(
 
     const periods = [
 
-        "5Y",
-        "3Y",
-        "1Y",
-        "6M",
-        "3M",
+        "5D",
         "1M",
-        "5D"
+        "3M",
+        "6M",
+        "1Y",
+        "3Y",
+        "5Y"
 
     ];
 
 
     /*
-     * Update each period.
+     * =====================================================
+     * FIRST PASS
+     * =====================================================
      */
+
+    const calculatedReturns = {};
+
+
+    let maxAbsoluteReturn = 0;
+
 
     periods.forEach(
         function(period) {
-
-            const element =
-                detailsPanel.querySelector(
-                    '[data-period-value="' +
-                    period +
-                    '"]'
-                );
-
-
-            if (!element) {
-
-                return;
-            }
-
-
-            /*
-             * Historical price.
-             */
 
             const historicalPrice =
                 Number(
@@ -1000,15 +1164,8 @@ function renderStockDetails(
                 historicalPrice <= 0
             ) {
 
-                element.textContent =
-                    "N/A";
-
-
-                element.classList.remove(
-                    "positive",
-                    "negative"
-                );
-
+                calculatedReturns[period] =
+                    null;
 
                 return;
             }
@@ -1031,56 +1188,817 @@ function renderStockDetails(
                 100;
 
 
+            calculatedReturns[period] =
+                returnPercentage;
+
+
+            const absoluteReturn =
+                Math.abs(
+                    returnPercentage
+                );
+
+
+            if (
+                absoluteReturn >
+                maxAbsoluteReturn
+            ) {
+
+                maxAbsoluteReturn =
+                    absoluteReturn;
+            }
+
+        }
+    );
+
+
+    /*
+     * =====================================================
+     * SECOND PASS
+     * =====================================================
+     */
+
+    periods.forEach(
+        function(period) {
+
+            const returnPercentage =
+                calculatedReturns[period];
+
+
+            const leftValue =
+                detailsPanel.querySelector(
+                    '[data-period-value-left="' +
+                    period +
+                    '"]'
+                );
+
+
+            const rightValue =
+                detailsPanel.querySelector(
+                    '[data-period-value-right="' +
+                    period +
+                    '"]'
+                );
+
+
+            const candle =
+                detailsPanel.querySelector(
+                    '[data-period-candle="' +
+                    period +
+                    '"]'
+                );
+
+
+            /*
+             * Stop any previous animation
+             * on these value elements.
+             */
+
+            stopPerformanceCountAnimation(
+                leftValue
+            );
+
+            stopPerformanceCountAnimation(
+                rightValue
+            );
+
+
+            /*
+             * Clear both value positions.
+             */
+
+            if (leftValue) {
+
+                leftValue.textContent =
+                    "";
+
+                leftValue.classList.remove(
+                    "positive",
+                    "negative",
+                    "neutral"
+                );
+
+                leftValue.style.left =
+                    "33px";
+            }
+
+
+            if (rightValue) {
+
+                rightValue.textContent =
+                    "";
+
+                rightValue.classList.remove(
+                    "positive",
+                    "negative",
+                    "neutral"
+                );
+
+                rightValue.style.left =
+                    "33px";
+            }
+
+
+            /*
+             * No historical price available.
+             */
+
+            if (
+                returnPercentage ===
+                null
+            ) {
+
+                if (rightValue) {
+
+                    rightValue.textContent =
+                        "N/A";
+
+                    rightValue.classList.add(
+                        "neutral"
+                    );
+
+                    rightValue.style.left =
+                        "40px";
+                }
+
+
+                if (candle) {
+
+                    candle.style.width =
+                        "0%";
+
+                    candle.classList.remove(
+                        "positive",
+                        "negative"
+                    );
+
+                    candle.classList.add(
+                        "neutral"
+                    );
+                }
+
+
+                return;
+            }
+
+
             /*
              * Render percentage.
              */
 
-            element.textContent =
+            const formattedValue =
                 formatReturnPercentage(
                     returnPercentage
                 );
 
 
             /*
-             * Remove previous color classes.
-             */
-
-            element.classList.remove(
-                "positive",
-                "negative"
-            );
-
-
-            /*
-             * Positive = green.
+             * Positive = value at RIGHT
+             * END of candle.
              */
 
             if (
                 returnPercentage > 0
             ) {
 
-                element.classList.add(
-                    "positive"
-                );
+                if (rightValue) {
+
+                    rightValue.textContent =
+                        formattedValue;
+
+                    rightValue.classList.add(
+                        "positive"
+                    );
+                }
+
+
+                if (candle) {
+
+                    candle.classList.remove(
+                        "negative",
+                        "neutral"
+                    );
+
+                    candle.classList.add(
+                        "positive"
+                    );
+
+                }
 
             }
 
 
             /*
-             * Negative = red.
+             * Negative = value at RIGHT
+             * END of candle.
              */
 
             else if (
                 returnPercentage < 0
             ) {
 
-                element.classList.add(
-                    "negative"
+                if (leftValue) {
+
+                    leftValue.textContent =
+                        formattedValue;
+
+                    leftValue.classList.add(
+                        "negative"
+                    );
+                }
+
+
+                if (candle) {
+
+                    candle.classList.remove(
+                        "positive",
+                        "neutral"
+                    );
+
+                    candle.classList.add(
+                        "negative"
+                    );
+
+                }
+
+            }
+
+
+            /*
+             * Zero = neutral.
+             */
+
+            else {
+
+                if (rightValue) {
+
+                    rightValue.textContent =
+                        formattedValue;
+
+                    rightValue.classList.add(
+                        "neutral"
+                    );
+                }
+
+
+                if (candle) {
+
+                    candle.classList.remove(
+                        "positive",
+                        "negative"
+                    );
+
+                    candle.classList.add(
+                        "neutral"
+                    );
+
+                    candle.style.width =
+                        "4%";
+
+                    candle.classList.add(
+                        "visible"
+                    );
+
+
+                    requestAnimationFrame(
+                        function() {
+
+                            positionPerformanceBubble(
+                                rightValue,
+                                candle,
+                                candle.closest(
+                                    ".stock-performance-track"
+                                )
+                            );
+
+                        }
+                    );
+
+                }
+
+                return;
+            }
+
+
+            /*
+             * =================================================
+             * SCALE CANDLE
+             * =================================================
+             *
+             * Fixed common scale:
+             *
+             * 100% return = 92% candle width.
+             *
+             * This means different stocks are now visually
+             * comparable.
+             *
+             * Minimum:
+             * 8%
+             *
+             * Maximum:
+             * 92%
+             */
+
+            if (
+                candle &&
+                maxAbsoluteReturn > 0
+            ) {
+
+                const absoluteReturn =
+                    Math.abs(
+                        returnPercentage
+                    );
+
+
+                const MAX_RETURN_SCALE =
+                    100;
+
+
+                let candleWidth =
+                    (
+                        absoluteReturn /
+                        MAX_RETURN_SCALE
+                    ) *
+                    92;
+
+
+                candleWidth =
+                    Math.min(
+                        92,
+                        candleWidth
+                    );
+
+
+                candleWidth =
+                    Math.max(
+                        8,
+                        Math.min(
+                            92,
+                            candleWidth
+                        )
+                    );
+
+
+                /*
+                 * Set target candle width.
+                 */
+
+                candle.style.width =
+                    candleWidth + "%";
+
+
+                candle.classList.add(
+                    "visible"
                 );
+
+
+                /*
+                 * =================================================
+                 * POSITION VALUE AT CANDLE RIGHT EDGE
+                 * =================================================
+                 *
+                 * IMPORTANT:
+                 *
+                 * Do NOT use candle.offsetWidth here.
+                 *
+                 * The candle has a CSS width transition.
+                 *
+                 * offsetWidth can therefore still contain
+                 * the old width when this code runs.
+                 *
+                 * Instead positionPerformanceBubble()
+                 * calculates the target endpoint from:
+                 *
+                 * track width × candle percentage
+                 *
+                 * This makes the percentage appear at the
+                 * RIGHT END of the colored candle.
+                 */
+
+                requestAnimationFrame(
+                    function() {
+
+                        const track =
+                            candle.closest(
+                                ".stock-performance-track"
+                            );
+
+
+                        const valueElement =
+                            returnPercentage > 0
+                                ? rightValue
+                                : leftValue;
+
+
+                        positionPerformanceBubble(
+                            valueElement,
+                            candle,
+                            track
+                        );
+
+
+                        /*
+                         * Start the percentage count-up
+                         * after the target position has
+                         * been established.
+                         */
+
+                        animatePerformanceValue(
+                            valueElement,
+                            returnPercentage
+                        );
+
+                    }
+                );
+
             }
 
         }
     );
+}
+
+
+/* =========================================================
+   ANIMATE PERFORMANCE VALUE
+   =========================================================
+ *
+ * Example:
+ *
+ * Final value:
+ *
+ * +64.00%
+ *
+ * The bubble will count:
+ *
+ * +1%
+ * +2%
+ * +3%
+ * ...
+ * +63%
+ * +64%
+ *
+ * Negative values work the same way:
+ *
+ * -1%
+ * -2%
+ * -3%
+ * ...
+ * -64%
+ *
+ * The animation uses requestAnimationFrame so
+ * it remains smooth on phones and desktop.
+ *
+ * ========================================================= */
+
+function animatePerformanceValue(valueElement, finalValue) {
+    if (!valueElement || !Number.isFinite(finalValue)) {
+        return;
+    }
+
+    stopPerformanceCountAnimation(valueElement);
+
+    const finalAbsoluteValue = Math.abs(finalValue);
+
+    if (finalAbsoluteValue <= 0) {
+        valueElement.textContent =
+            formatReturnPercentage(finalValue);
+
+        return;
+    }
+
+    const isNegative = finalValue < 0;
+
+    valueElement.textContent =
+        isNegative
+            ? "-0.00%"
+            : "+0.00%";
+
+    const startTime = performance.now();
+
+    function updateCount(currentTime) {
+
+        const elapsed =
+            currentTime - startTime;
+
+        const progress =
+            Math.min(
+                1,
+                elapsed / STOCK_DETAILS_COUNT_DURATION
+            );
+
+        const easedProgress =
+            1 - Math.pow(
+                1 - progress,
+                2
+            );
+
+        let currentValue =
+            finalAbsoluteValue *
+            easedProgress;
+
+        currentValue =
+            Math.min(
+                finalAbsoluteValue,
+                currentValue
+            );
+
+        valueElement.textContent =
+            (
+                isNegative
+                    ? "-"
+                    : "+"
+            ) +
+            currentValue.toFixed(2) +
+            "%";
+
+        if (progress < 1) {
+
+            valueElement._performanceCountFrame =
+                requestAnimationFrame(
+                    updateCount
+                );
+
+            return;
+        }
+
+        valueElement.textContent =
+            formatReturnPercentage(
+                finalValue
+            );
+
+        valueElement._performanceCountFrame =
+            null;
+    }
+
+    valueElement._performanceCountFrame =
+        requestAnimationFrame(
+            updateCount
+        );
+}
+
+
+/* =========================================================
+   STOP ONE PERFORMANCE COUNT ANIMATION
+   ========================================================= */
+
+function stopPerformanceCountAnimation(
+    valueElement
+) {
+
+    if (!valueElement) {
+
+        return;
+    }
+
+
+    if (
+        valueElement._performanceCountFrame
+    ) {
+
+        cancelAnimationFrame(
+            valueElement._performanceCountFrame
+        );
+
+
+        valueElement._performanceCountFrame =
+            null;
+    }
+}
+
+
+/* =========================================================
+   STOP ALL PERFORMANCE COUNT ANIMATIONS
+   ========================================================= */
+
+function stopPerformanceCountAnimations(
+    detailsPanel
+) {
+
+    if (!detailsPanel) {
+
+        return;
+    }
+
+
+    const valueElements =
+        detailsPanel.querySelectorAll(
+            ".stock-performance-value-left, " +
+            ".stock-performance-value-right"
+        );
+
+
+    valueElements.forEach(
+        function(element) {
+
+            stopPerformanceCountAnimation(
+                element
+            );
+
+        }
+    );
+}
+
+
+/* =========================================================
+   POSITION PERFORMANCE VALUE BUBBLE
+   =========================================================
+ *
+ * IMPORTANT:
+ *
+ * The percentage must be positioned at the
+ * RIGHT END of the colored candle.
+ *
+ * We calculate the target candle endpoint from
+ * the candle's percentage width instead of using
+ * candle.offsetWidth immediately after changing
+ * the width.
+ *
+ * ========================================================= */
+
+function positionPerformanceBubble(
+    valueElement,
+    candle,
+    track
+) {
+
+    if (
+        !valueElement ||
+        !candle ||
+        !track
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * Read the percentage that was assigned
+     * to the candle.
+     *
+     * Example:
+     *
+     * "65.4%" -> 65.4
+     */
+
+    const candlePercentage =
+        parseFloat(
+            candle.style.width
+        );
+
+
+    if (
+        !Number.isFinite(
+            candlePercentage
+        )
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * The candle starts at the LEFT edge
+     * of the track.
+     *
+     * clientWidth gives the usable track width
+     * without the border.
+     */
+
+    const trackWidth =
+        track.clientWidth;
+
+
+    if (
+        trackWidth <= 0
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * Calculate the target candle width.
+     *
+     * This is the width the candle is
+     * animating toward.
+     */
+
+    const candleTargetWidth =
+        (
+            trackWidth *
+            candlePercentage
+        ) /
+        100;
+
+
+    /*
+     * Find the track's position relative
+     * to the performance row.
+     */
+
+    const row =
+        valueElement.closest(
+            ".stock-performance-row"
+        );
+
+
+    if (!row) {
+
+        return;
+    }
+
+
+    const trackRect =
+        track.getBoundingClientRect();
+
+
+    const rowRect =
+        row.getBoundingClientRect();
+
+
+    /*
+     * Calculate the RIGHT EDGE of the candle.
+     *
+     * Track left
+     * +
+     * target candle width
+     */
+
+    const candleRight =
+        (
+            trackRect.left -
+            rowRect.left
+        ) +
+        candleTargetWidth;
+
+
+    /*
+     * Because the bubble is centered using:
+     *
+     * translate(-50%, -50%)
+     *
+     * we need half of the bubble width
+     * when keeping it inside the track.
+     */
+
+    const bubbleWidth =
+        valueElement.offsetWidth;
+
+
+    const halfBubbleWidth =
+        bubbleWidth / 2;
+
+
+    /*
+     * Track boundaries relative to row.
+     */
+
+    const trackLeft =
+        trackRect.left -
+        rowRect.left;
+
+
+    const trackRight =
+        trackRect.right -
+        rowRect.left;
+
+
+    /*
+     * Keep the bubble inside the available
+     * performance track when the candle gets
+     * very close to the right edge.
+     */
+
+    const minimumCenter =
+        trackLeft +
+        halfBubbleWidth;
+
+
+    const maximumCenter =
+        trackRight -
+        halfBubbleWidth;
+
+
+    const bubbleCenter =
+        Math.max(
+            minimumCenter,
+            Math.min(
+                maximumCenter,
+                candleRight
+            )
+        );
+
+
+    /*
+     * FINAL POSITION
+     *
+     * This is the important part.
+     *
+     * The percentage bubble is now placed
+     * at the RIGHT END of the colored candle.
+     */
+
+    valueElement.style.left =
+        bubbleCenter + "px";
 }
 
 
@@ -1165,5 +2083,4 @@ if (
 
 }
 
-// PERFECT<!--/* 30TH AUG FINAL */-->
- //
+/* GOOD FOR NOW */
