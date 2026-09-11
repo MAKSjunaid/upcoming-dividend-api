@@ -416,7 +416,7 @@ function ensureFavoriteBurstCSS() {
 
             gap: 2px;
 
-            font-size: 0.82em;
+            font-size: 12px;  /* CURRENT SHARE DOWN  0.82em  */
 
             line-height: 1;
 
@@ -470,19 +470,19 @@ function ensureFavoriteBurstCSS() {
 
             justify-content: center;
 
-            width: 16px;
+            width: 12.5px;
 
-            height: 16px;
+            height: 12.5px;
 
-            line-height: 16px;
+            line-height: 12.5px;
         }
 
 
         .price-change-arrow svg {
 
-            width: 16px;
+            width: 12.5px;
 
-            height: 16px;
+            height: 12.5px;
 
             display: block;
 
@@ -2231,3 +2231,5 @@ function renderStocks(
         totalRecords
     );
 }
+
+/* GOOD FOR NOW */
