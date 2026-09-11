@@ -631,6 +631,111 @@ function openStockDetails(
 
 
 /* =========================================================
+   RESTORE EXISTING DETAILS PANEL
+   =========================================================
+ *
+ * Used by app.js when the dividend backend version
+ * changes and the dividend cards are rebuilt.
+ *
+ * IMPORTANT:
+ *
+ * This function DOES NOT call:
+ *
+ *     openStockDetails()
+ *
+ * and therefore DOES NOT call:
+ *
+ *     /api/stock-details
+ *
+ * The existing DOM panel is moved into the new
+ * stock card.
+ *
+ * This preserves:
+ *
+ * - 5Y value
+ * - 3Y value
+ * - 1Y value
+ * - 6M value
+ * - 3M value
+ * - 1M value
+ * - 5D value
+ * - candle widths
+ * - candle colors
+ * - percentage positions
+ * - current count-up state
+ *
+ * ========================================================= */
+
+function restoreStockDetailsPanel(
+    card,
+    detailsPanel
+) {
+
+    if (
+        !card ||
+        !detailsPanel
+    ) {
+
+        return;
+    }
+
+
+    /*
+     * Prevent duplicate details panels.
+     */
+
+    const existingDetails =
+        card.querySelector(
+            ".stock-details-panel"
+        );
+
+
+    if (
+        existingDetails &&
+        existingDetails !== detailsPanel
+    ) {
+
+        existingDetails.remove();
+    }
+
+
+    /*
+     * Move the EXISTING panel into the
+     * newly rendered stock card.
+     *
+     * IMPORTANT:
+     *
+     * This does NOT recreate the panel.
+     *
+     * Therefore all existing DOM values,
+     * classes and inline styles remain.
+     */
+
+    card.appendChild(
+        detailsPanel
+    );
+
+
+    /*
+     * Make sure the panel remains open.
+     */
+
+    detailsPanel.classList.add(
+        "open"
+    );
+
+
+    /*
+     * Remember the newly rendered card
+     * as the currently open stock.
+     */
+
+    currentlyOpenStockDetails =
+        card;
+}
+
+
+/* =========================================================
    CLOSE DETAILS
    ========================================================= */
 
@@ -1649,57 +1754,94 @@ function renderStockDetails(
  *
  * ========================================================= */
 
-function animatePerformanceValue(valueElement, finalValue) {
-    if (!valueElement || !Number.isFinite(finalValue)) {
+function animatePerformanceValue(
+    valueElement,
+    finalValue
+) {
+
+    if (
+        !valueElement ||
+        !Number.isFinite(finalValue)
+    ) {
+
         return;
     }
 
-    stopPerformanceCountAnimation(valueElement);
 
-    const finalAbsoluteValue = Math.abs(finalValue);
+    stopPerformanceCountAnimation(
+        valueElement
+    );
 
-    if (finalAbsoluteValue <= 0) {
+
+    const finalAbsoluteValue =
+        Math.abs(
+            finalValue
+        );
+
+
+    if (
+        finalAbsoluteValue <= 0
+    ) {
+
         valueElement.textContent =
-            formatReturnPercentage(finalValue);
+            formatReturnPercentage(
+                finalValue
+            );
 
         return;
     }
 
-    const isNegative = finalValue < 0;
+
+    const isNegative =
+        finalValue < 0;
+
 
     valueElement.textContent =
         isNegative
             ? "-0.00%"
             : "+0.00%";
 
-    const startTime = performance.now();
 
-    function updateCount(currentTime) {
+    const startTime =
+        performance.now();
+
+
+    function updateCount(
+        currentTime
+    ) {
 
         const elapsed =
-            currentTime - startTime;
+            currentTime -
+            startTime;
+
 
         const progress =
             Math.min(
                 1,
-                elapsed / STOCK_DETAILS_COUNT_DURATION
+                elapsed /
+                STOCK_DETAILS_COUNT_DURATION
             );
 
+
         const easedProgress =
-            1 - Math.pow(
+            1 -
+            Math.pow(
                 1 - progress,
                 2
             );
 
+
         let currentValue =
             finalAbsoluteValue *
             easedProgress;
+
 
         currentValue =
             Math.min(
                 finalAbsoluteValue,
                 currentValue
             );
+
 
         valueElement.textContent =
             (
@@ -1710,7 +1852,10 @@ function animatePerformanceValue(valueElement, finalValue) {
             currentValue.toFixed(2) +
             "%";
 
-        if (progress < 1) {
+
+        if (
+            progress < 1
+        ) {
 
             valueElement._performanceCountFrame =
                 requestAnimationFrame(
@@ -1720,14 +1865,17 @@ function animatePerformanceValue(valueElement, finalValue) {
             return;
         }
 
+
         valueElement.textContent =
             formatReturnPercentage(
                 finalValue
             );
 
+
         valueElement._performanceCountFrame =
             null;
     }
+
 
     valueElement._performanceCountFrame =
         requestAnimationFrame(
@@ -2083,4 +2231,4 @@ if (
 
 }
 
-/* GOOD FOR NOW */
+//PERFECT
