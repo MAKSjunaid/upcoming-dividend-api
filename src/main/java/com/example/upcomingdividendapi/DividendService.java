@@ -102,15 +102,15 @@ public class DividendService {
      * These delays are intentionally spread out to reduce
      * memory usage and Yahoo pressure on Render.
      */
-    private static final int YAHOO_BATCH_1_DELAY_SECONDS = 30;
+    private static final int YAHOO_BATCH_1_DELAY_SECONDS = 1;
 
-    private static final int YAHOO_BATCH_2_DELAY_SECONDS = 40;
+    private static final int YAHOO_BATCH_2_DELAY_SECONDS = 10;
 
-    private static final int YAHOO_BATCH_3_DELAY_SECONDS = 50;
+    private static final int YAHOO_BATCH_3_DELAY_SECONDS = 20;
 
-    private static final int YAHOO_BATCH_4_DELAY_SECONDS = 60;
+    private static final int YAHOO_BATCH_4_DELAY_SECONDS = 30;
 
-    private static final int YAHOO_BATCH_5_DELAY_SECONDS = 70;
+    private static final int YAHOO_BATCH_5_DELAY_SECONDS = 40;
 
     /*
      * HTTP connection timeout.
