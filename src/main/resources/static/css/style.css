@@ -1947,8 +1947,8 @@ body {
     background:
         linear-gradient(
             to right,
-            #3aa568,
-            #62c487
+            #2f925b,   /*3aa568 CLRRRRRRRR*/
+            #4fb477    /*62c487 CLRRRRRRRR*/
         );
 
     box-shadow:
@@ -1975,8 +1975,8 @@ body {
     background:
         linear-gradient(
             to right,
-            #db6b6b,
-            #ee8b8b
+            #c95757,  /*db6b6b CLRRRRRRR*/
+            #df7474   /*ee8b8b CLRRRRRRR*/
         );
 
     box-shadow:
