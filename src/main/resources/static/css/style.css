@@ -2579,7 +2579,7 @@ body {
 
     gap: 2px;
 
-    font-size: 1em;
+    font-size: 12px;  /* CURRENT SHARE DOWN  1em  */
 
     line-height: 1;
 
@@ -2674,3 +2674,4 @@ body {
 }
 
 /* GOOD FOR NOW */
+
