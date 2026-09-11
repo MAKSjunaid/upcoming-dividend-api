@@ -70,7 +70,7 @@ public class DividendService {
      *
      * Maximum 8 Yahoo calls at one time.
      */
-    private static final int THREAD_COUNT = 8;
+    private static final int THREAD_COUNT = 5;
 
     /*
      * ============================================================
