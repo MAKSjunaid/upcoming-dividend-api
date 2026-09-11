@@ -123,11 +123,6 @@ const LAST_SUCCESSFUL_DATA_KEY =
 const LAST_SUCCESSFUL_VERSION_KEY =
     "lastSuccessfulDividendVersion";
 
-
-/* =========================================================
-   FAVORITES
-   ========================================================= */
-
 let favorites = new Set(
     JSON.parse(
         localStorage.getItem(
@@ -136,6 +131,10 @@ let favorites = new Set(
     )
 );
 
+
+/* =========================================================
+   FAVORITES
+   ========================================================= */
 
 function saveFavorites() {
 
@@ -315,27 +314,12 @@ function restorePreviousDividendData() {
     }
 
 
-    /*
-     * IMPORTANT:
-     *
-     * Restore the previous successful data
-     * BEFORE making any API request.
-     */
-
     dividendData =
         previousData;
 
 
     currentPage = 1;
 
-
-    /*
-     * Restore the version that produced this data.
-     *
-     * This is important because if the backend has
-     * already moved to a newer version, automatic
-     * refresh must detect that difference.
-     */
 
     const previousVersion =
         loadLastSuccessfulVersion();
@@ -350,10 +334,6 @@ function restorePreviousDividendData() {
     }
 
 
-    /*
-     * Immediately render the previous data.
-     */
-
     sortStocks();
 
 
@@ -363,20 +343,7 @@ function restorePreviousDividendData() {
 
 /* =========================================================
    INITIAL WAITING STATE
-   =========================================================
- *
- * This is ONLY used when:
- *
- * - Initial page load
- * - No previous browser data exists
- * - We are waiting for the backend to produce records
- *
- * IMPORTANT:
- *
- * We use the user's requested text:
- *
- * "Please wait while fetching the result..."
- */
+   ========================================================= */
 
 function showInitialWaitingState() {
 
@@ -415,15 +382,6 @@ function hideInitialWaitingState() {
 
 
     if (loadingMessage) {
-
-        /*
-         * Explicitly clear the waiting text.
-         *
-         * This prevents the old
-         * "Please wait while fetching the result..."
-         * message from remaining visible after data
-         * has already been restored/rendered.
-         */
 
         loadingMessage.textContent =
             "";
@@ -1155,10 +1113,6 @@ function dateToInputValue(date) {
 }
 
 
-/* =========================================================
-   ADD 15 DAYS
-   ========================================================= */
-
 function addFifteenDays(dateValue) {
 
     const parts =
@@ -1376,18 +1330,179 @@ async function getBackendVersion() {
 
 
 /* =========================================================
+   GET CURRENTLY OPEN STOCK PERFORMANCE STATE
+   =========================================================
+ *
+ * IMPORTANT:
+ *
+ * We save the ACTUAL DOM panel.
+ *
+ * We do NOT reload the Stock Performance API.
+ *
+ * ========================================================= */
+
+function getOpenStockPerformanceState() {
+
+    if (!stockList) {
+        return null;
+    }
+
+
+    const openPanel =
+        stockList.querySelector(
+            ".stock-details-panel"
+        );
+
+
+    if (!openPanel) {
+        return null;
+    }
+
+
+    const card =
+        openPanel.closest(
+            ".stock-card"
+        );
+
+
+    if (!card) {
+        return null;
+    }
+
+
+    const symbolElement =
+        card.querySelector(
+            ".symbol"
+        );
+
+
+    if (!symbolElement) {
+        return null;
+    }
+
+
+    const symbol =
+        symbolElement.textContent.trim();
+
+
+    if (!symbol) {
+        return null;
+    }
+
+
+    return {
+        symbol: symbol,
+        detailsPanel: openPanel
+    };
+}
+
+
+/* =========================================================
+   RESTORE STOCK PERFORMANCE AFTER AUTO REFRESH
+   =========================================================
+ *
+ * IMPORTANT:
+ *
+ * This does NOT call openStockDetails().
+ *
+ * Therefore it does NOT call:
+ *
+ * /api/stock-details
+ *
+ * The existing Stock Performance DOM is simply moved
+ * into the newly rendered card.
+ *
+ * ========================================================= */
+
+function restoreStockPerformanceAfterRefresh(
+    state
+) {
+
+    if (
+        !state ||
+        !state.symbol ||
+        !state.detailsPanel ||
+        !stockList
+    ) {
+
+        return;
+    }
+
+
+    requestAnimationFrame(
+        function() {
+
+            const cards =
+                stockList.querySelectorAll(
+                    ".stock-card"
+                );
+
+
+            for (
+                const card of cards
+            ) {
+
+                const symbolElement =
+                    card.querySelector(
+                        ".symbol"
+                    );
+
+
+                if (!symbolElement) {
+
+                    continue;
+                }
+
+
+                const cardSymbol =
+                    symbolElement.textContent.trim();
+
+
+                if (
+                    cardSymbol !==
+                    state.symbol
+                ) {
+
+                    continue;
+                }
+
+
+                /*
+                 * IMPORTANT:
+                 *
+                 * Do NOT call:
+                 *
+                 * openStockDetails()
+                 *
+                 * because that would call the
+                 * stock-details API again.
+                 */
+
+                if (
+                    typeof restoreStockDetailsPanel ===
+                    "function"
+                ) {
+
+                    restoreStockDetailsPanel(
+                        card,
+                        state.detailsPanel
+                    );
+                }
+
+
+                return;
+            }
+
+        }
+    );
+}
+
+
+/* =========================================================
    INITIAL LOAD
    ========================================================= */
 
 async function initialLoadDividends() {
-
-    /*
-     * -----------------------------------------------------
-     * STEP 1
-     * -----------------------------------------------------
-     *
-     * Restore browser data immediately.
-     */
 
     const hasPreviousData =
         restorePreviousDividendData();
@@ -1402,10 +1517,6 @@ async function initialLoadDividends() {
             resolveDates();
 
     } catch (e) {
-
-        /*
-         * If previous data exists, keep it visible.
-         */
 
         if (
             hasPreviousData
@@ -1427,10 +1538,6 @@ async function initialLoadDividends() {
     }
 
 
-    /*
-     * Keep date inputs synchronized.
-     */
-
     fromDate.value =
         dates.from;
 
@@ -1441,21 +1548,6 @@ async function initialLoadDividends() {
 
     updateDateDisplays();
 
-
-    /*
-     * -----------------------------------------------------
-     * IMPORTANT FIX
-     * -----------------------------------------------------
-     *
-     * If browser data already exists:
-     *
-     * - Render it
-     * - Hide loading immediately
-     * - Do NOT show:
-     *   "Please wait while fetching the result..."
-     *
-     * The API request below is completely silent.
-     */
 
     if (
         hasPreviousData
@@ -1468,42 +1560,18 @@ async function initialLoadDividends() {
         clearMessages();
 
 
-        /*
-         * Make sure the top filter summary is also
-         * updated immediately, just like after Search.
-         */
-
         updateSummary(
             currentInvestment,
             dates
         );
 
 
-        /*
-         * Explicitly hide the loading element.
-         *
-         * This is the important part that prevents
-         * the stale loading text from remaining visible.
-         */
-
         hideInitialWaitingState();
 
-
-        /*
-         * Render again after the summary is updated.
-         */
 
         sortStocks();
 
     } else {
-
-        /*
-         * No previous browser data.
-         *
-         * Only now show:
-         *
-         * "Please wait while fetching the result..."
-         */
 
         initialDataReady =
             false;
@@ -1516,14 +1584,6 @@ async function initialLoadDividends() {
         showInitialWaitingState();
     }
 
-
-    /*
-     * -----------------------------------------------------
-     * STEP 2
-     * -----------------------------------------------------
-     *
-     * Fetch backend data silently.
-     */
 
     try {
 
@@ -1545,15 +1605,6 @@ async function initialLoadDividends() {
         }
 
 
-        /*
-         * IMPORTANT:
-         *
-         * We DO NOT clear dividendData here.
-         *
-         * Therefore existing browser data remains visible
-         * while this request is running.
-         */
-
         const data =
             await fetchDividendData(
                 dates.from,
@@ -1561,18 +1612,10 @@ async function initialLoadDividends() {
             );
 
 
-        /* =================================================
-           INITIAL + RECORDS
-           ================================================= */
-
         if (
             Array.isArray(data) &&
             data.length > 0
         ) {
-
-            /*
-             * New successful data replaces old browser data.
-             */
 
             dividendData =
                 data;
@@ -1581,10 +1624,6 @@ async function initialLoadDividends() {
             initialDataReady =
                 true;
 
-
-            /*
-             * Confirm the version AFTER records are received.
-             */
 
             let versionAfter =
                 versionBefore;
@@ -1604,19 +1643,11 @@ async function initialLoadDividends() {
             }
 
 
-            /*
-             * Only save successful records.
-             */
-
             saveLastSuccessfulDividendData(
                 data,
                 versionAfter
             );
 
-
-            /*
-             * Use the latest confirmed version.
-             */
 
             if (
                 versionAfter !== null &&
@@ -1628,28 +1659,14 @@ async function initialLoadDividends() {
             }
 
 
-            /*
-             * Update the top filter summary.
-             */
-
             updateSummary(
                 currentInvestment,
                 dates
             );
 
 
-            /*
-             * Render the new records.
-             */
-
             sortStocks();
 
-
-            /*
-             * IMPORTANT:
-             *
-             * Explicitly remove the initial waiting message.
-             */
 
             hideInitialWaitingState();
 
@@ -1657,10 +1674,6 @@ async function initialLoadDividends() {
             return;
         }
 
-
-        /* =================================================
-           INITIAL + []
-           ================================================= */
 
         if (
             Array.isArray(data) &&
@@ -1672,41 +1685,13 @@ async function initialLoadDividends() {
             );
 
 
-            /*
-             * -------------------------------------------------
-             * Previous browser data exists
-             * -------------------------------------------------
-             */
-
             if (
                 hasPreviousData
             ) {
 
-                /*
-                 * KEEP existing dividendData.
-                 *
-                 * Do NOT:
-                 *
-                 * dividendData = [];
-                 */
-
                 initialDataReady =
                     true;
 
-
-                /*
-                 * IMPORTANT:
-                 *
-                 * Do NOT replace currentDataVersion with
-                 * versionBefore here.
-                 *
-                 * We must preserve the version belonging
-                 * to the browser data.
-                 *
-                 * If backend version is newer, the 5-second
-                 * automatic refresh will detect the change
-                 * and retry /api/dividends.
-                 */
 
                 clearMessages();
 
@@ -1720,26 +1705,9 @@ async function initialLoadDividends() {
                 sortStocks();
 
 
-                /*
-                 * Most important:
-                 *
-                 * Keep loading text hidden.
-                 */
-
                 hideInitialWaitingState();
 
-
             } else {
-
-                /*
-                 * -------------------------------------------------
-                 * No browser data exists
-                 * -------------------------------------------------
-                 *
-                 * API returned [].
-                 *
-                 * Keep waiting.
-                 */
 
                 initialDataReady =
                     false;
@@ -1758,12 +1726,6 @@ async function initialLoadDividends() {
 
     } catch (e) {
 
-        /*
-         * Initial API error.
-         *
-         * NEVER destroy existing browser data.
-         */
-
         console.warn(
             "Initial dividend load failed:",
             e
@@ -1773,10 +1735,6 @@ async function initialLoadDividends() {
         if (
             hasPreviousData
         ) {
-
-            /*
-             * Existing data stays visible.
-             */
 
             initialDataReady =
                 true;
@@ -1794,18 +1752,9 @@ async function initialLoadDividends() {
             sortStocks();
 
 
-            /*
-             * Never leave the initial waiting message
-             * visible when we already have usable data.
-             */
-
             hideInitialWaitingState();
 
         } else {
-
-            /*
-             * Nothing to display yet.
-             */
 
             initialDataReady =
                 false;
@@ -2007,11 +1956,6 @@ async function searchDividends() {
         );
 
 
-        /*
-         * Manual Search intentionally replaces the
-         * currently displayed data.
-         */
-
         dividendData =
             finalData;
 
@@ -2033,10 +1977,6 @@ async function searchDividends() {
 
         sortStocks();
 
-
-        /*
-         * Save only successful non-empty data.
-         */
 
         if (
             Array.isArray(finalData) &&
@@ -2140,15 +2080,6 @@ async function autoRefreshDividends() {
 
     try {
 
-        /*
-         * =================================================
-         * INITIAL DATA NOT READY
-         * =================================================
-         *
-         * If we have no successful data yet, keep trying
-         * /api/dividends every 5 seconds.
-         */
-
         if (
             !initialDataReady
         ) {
@@ -2240,12 +2171,6 @@ async function autoRefreshDividends() {
 
             } else {
 
-                /*
-                 * Still no records.
-                 *
-                 * Keep waiting.
-                 */
-
                 showInitialWaitingState();
             }
 
@@ -2264,13 +2189,7 @@ async function autoRefreshDividends() {
 
         /* =================================================
            SAME VERSION
-           =================================================
-         *
-         * EXACT RULE:
-         *
-         * Same + Any
-         *     -> Do nothing
-         */
+           ================================================= */
 
         if (
             currentDataVersion ===
@@ -2283,15 +2202,7 @@ async function autoRefreshDividends() {
 
         /* =================================================
            VERSION CHANGED
-           =================================================
-         *
-         * Backend version changed.
-         *
-         * Now request the actual dividend data.
-         *
-         * Existing cards remain untouched while the
-         * request is loading.
-         */
+           ================================================= */
 
         const data =
             await fetchDividendData(
@@ -2302,19 +2213,7 @@ async function autoRefreshDividends() {
 
         /* =================================================
            CHANGED + []
-           =================================================
-         *
-         * EXACT RULE:
-         *
-         * Changed + []
-         *     -> Ignore
-         *
-         * Do NOT:
-         *
-         * - clear dividendData
-         * - render empty
-         * - update currentDataVersion
-         */
+           ================================================= */
 
         if (
             !Array.isArray(data) ||
@@ -2334,10 +2233,20 @@ async function autoRefreshDividends() {
            CHANGED + RECORDS
            =================================================
          *
-         * EXACT RULE:
+         * IMPORTANT:
          *
-         * Changed + Records
-         *     -> Replace data
+         * Remember the ACTUAL currently open
+         * Stock Performance panel BEFORE
+         * sortStocks() destroys and recreates
+         * the dividend cards.
+         */
+
+        const openStockPerformanceState =
+            getOpenStockPerformanceState();
+
+
+        /*
+         * Replace dividend data.
          */
 
         dividendData =
@@ -2345,7 +2254,7 @@ async function autoRefreshDividends() {
 
 
         /*
-         * Confirm version after receiving records.
+         * Confirm latest version.
          */
 
         let confirmedVersion =
@@ -2391,6 +2300,30 @@ async function autoRefreshDividends() {
 
         sortStocks();
 
+
+        /*
+         * =================================================
+         * RESTORE EXISTING STOCK PERFORMANCE PANEL
+         * =================================================
+         *
+         * IMPORTANT:
+         *
+         * DO NOT call:
+         *
+         * openStockDetails()
+         *
+         * because that would trigger:
+         *
+         * /api/stock-details?symbol=...&period=5Y
+         *
+         * again.
+         *
+         * Instead we move the existing DOM panel.
+         */
+
+        restoreStockPerformanceAfterRefresh(
+            openStockPerformanceState
+        );
 
     } catch (e) {
 
@@ -2804,10 +2737,6 @@ function sortStocks() {
         [...dividendData];
 
 
-    /* =====================================================
-       FAVORITES
-       ===================================================== */
-
     if (
         currentSort ===
         "favorites"
@@ -2835,10 +2764,6 @@ function sortStocks() {
         );
 
     } else {
-
-        /* =================================================
-           NORMAL SORTING
-           ================================================= */
 
         sortedData.sort(
             function(a, b) {
@@ -3741,10 +3666,6 @@ async function refreshDividends() {
 
     try {
 
-        /*
-         * Pull-to-refresh remains a MANUAL refresh.
-         */
-
         await searchDividends();
 
     } finally {
@@ -3784,3 +3705,5 @@ async function refreshDividends() {
    ========================================================= */
 
 initialLoadDividends();
+
+//PERFECT
