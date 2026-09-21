@@ -53,7 +53,7 @@ public class DividendService {
      * This is the MAXIMUM number of Yahoo requests that can
      * execute at the same time.
      *
-     * Even if there are 400+ sharees, Render will NOT create
+     * Even if there are 400+ shares, Render will NOT create
      * 400 threads.
      *
      * Example:
@@ -679,6 +679,56 @@ public class DividendService {
                         fromDateValue,
                         toDateValue
                 );
+
+        // ========================================================
+        // 15b. SYNCHRONOUS PRICE TOP-UP FOR THIS RESPONSE
+        // ========================================================
+
+        /*
+         * Without this step, a cold cache (first request of the
+         * day, after Render restarts the container and the local
+         * cache file is gone) would return an EMPTY array here:
+         *
+         * Dividend records get fetched from NSE/Groww above, but
+         * none of them have a Yahoo price yet - prices are
+         * normally filled in later by the background batches,
+         * AFTER this method already returned. Step 16 below then
+         * removes every share without a price, leaving [].
+         *
+         * To avoid that, we synchronously fetch prices for ONLY
+         * the shares missing from THIS response (not the full
+         * 30-day window - that stays on the background batches
+         * started above) so the caller gets real data on the
+         * very first request instead of having to try again a
+         * minute later.
+         */
+
+        List<DividendData> missingPriceForResponse =
+                getSharesWithoutPrice(
+                        requestedShares
+                );
+
+        if (!missingPriceForResponse.isEmpty()) {
+
+            System.out.println(
+                    "Synchronously fetching Yahoo prices for "
+                            + missingPriceForResponse.size()
+                            + " share(s) missing from this response."
+            );
+
+            boolean topUpChanged =
+                    fetchYahooPricesInParallel(
+                            missingPriceForResponse
+                    );
+
+            if (topUpChanged) {
+
+                saveCache(
+                        cache,
+                        true
+                );
+            }
+        }
 
         // ========================================================
         // 16. REMOVE INVALID NORMAL RECORDS
