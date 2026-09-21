@@ -961,6 +961,17 @@ editButton.addEventListener(
 );
 
 
+/*
+ * Prevent the native date picker from offering any date
+ * before today, so the user can never pick a past
+ * "From Date" in the first place.
+ */
+fromDate.min =
+    dateToInputValue(
+        new Date()
+    );
+
+
 fromDate.addEventListener(
     "change",
     function() {
@@ -1194,6 +1205,23 @@ function resolveDates() {
 
         selectedFrom =
             tomorrow;
+    }
+
+
+    const todayValue =
+        dateToInputValue(
+            new Date()
+        );
+
+
+    if (
+        selectedFrom <
+        todayValue
+    ) {
+
+        throw new Error(
+            "From Date can not be a past date."
+        );
     }
 
 
