@@ -36,6 +36,13 @@
             <version>2.10.1</version>
         </dependency>
 
+        <!-- Neon / Postgres backup (only used when DATABASE_URL is set) -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
