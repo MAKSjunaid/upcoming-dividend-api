@@ -8,251 +8,208 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
-import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
 public class DividendService {
 
+    /*
+     * ============================================================
+     * HOW THIS SERVICE WORKS
+     * ============================================================
+     *
+     * 1. Users are ALWAYS answered from memory (a lock-free,
+     *    immutable snapshot). A request never waits for NSE,
+     *    Groww, Yahoo, the disk or Neon. The only exceptions:
+     *      - the very first run with no data at all
+     *      - a custom date range outside the default 30-day
+     *        window (fetched once, then reused for 1 hour)
+     *
+     * 2. A background tick (every 10 seconds) decides if
+     *    anything is due. It only works while someone used the
+     *    app in the last 10 minutes or a live tab is open, so
+     *    an idle server makes ZERO outside calls.
+     *
+     * 3. Prices (Yahoo spark, 20 symbols per request):
+     *      - market open (09:15-15:35 IST, trading day):
+     *          refreshed every 30 seconds
+     *      - market closed / weekend / holiday:
+     *          fetched ONCE after 15:35 if the stored price is
+     *          older than the last close, then never again
+     *          until the next session (closing price is final)
+     *      - new dividend announced (any time): price fetched
+     *        immediately
+     *      - weekday holidays are detected automatically from
+     *        Yahoo's last-trade time
+     *
+     * 4. Dividends (NSE + Groww): every 15 minutes during the
+     *    day on trading days, hourly otherwise.
+     *
+     * 5. Every change bumps "version" and is pushed to open
+     *    tabs instantly via Server-Sent Events (LiveUpdates).
+     *
+     * 6. Backup (CacheStore): local file every 30 seconds when
+     *    something changed (atomic write), Neon at most every
+     *    15 minutes for price-only changes, at the next save
+     *    for new dividends.
+     */
+
     // ============================================================
     // CONFIGURATION
     // ============================================================
 
     /*
-     * ============================================================
-     * YAHOO THREAD COUNT
-     * ============================================================
-     *
-     * This is the MAXIMUM number of Yahoo requests that can
-     * execute at the same time.
-     *
-     * Even if there are 400+ shares, Render will NOT create
-     * 400 threads.
-     *
-     * Example:
-     *
-     * 425 shares
-     *      |
-     *      +---- Batch 1 = 85 shares
-     *      +---- Batch 2 = 85 shares
-     *      +---- Batch 3 = 85 shares
-     *      +---- Batch 4 = 85 shares
-     *      +---- Batch 5 = 85 shares
-     *
-     * Inside the batches:
-     *
-     * Maximum 8 Yahoo calls at one time.
+     * Maximum number of Yahoo requests running at once.
      */
-    private static final int THREAD_COUNT = 5;
+    private static final int THREAD_COUNT = 4;
 
     /*
-     * ============================================================
-     * NUMBER OF YAHOO BATCHES
-     * ============================================================
-     *
-     * The system automatically divides the eligible shares into
-     * this many batches.
-     *
-     * 400 shares -> 5 batches
-     * 425 shares -> 5 batches
-     * 500 shares -> 5 batches
-     *
-     * If there are fewer shares, fewer actual batches may be used.
+     * Yahoo spark accepts up to 20 symbols per request.
      */
-    private static final int YAHOO_BATCH_COUNT = 5;
+    private static final int YAHOO_SPARK_BATCH_SIZE = 20;
 
-    /*
-     * ============================================================
-     * BATCH START DELAYS
-     * ============================================================
-     *
-     * Batch 1 starts 30 seconds after the API request.
-     * Batch 2 starts 40 seconds after the API request.
-     * Batch 3 starts 50 seconds after the API request.
-     * Batch 4 starts 60 seconds after the API request.
-     * Batch 5 starts 70 seconds after the API request.
-     *
-     * These delays are intentionally spread out to reduce
-     * memory usage and Yahoo pressure on Render.
-     */
-    private static final int YAHOO_BATCH_1_DELAY_SECONDS = 1;
-
-    private static final int YAHOO_BATCH_2_DELAY_SECONDS = 10;
-
-    private static final int YAHOO_BATCH_3_DELAY_SECONDS = 20;
-
-    private static final int YAHOO_BATCH_4_DELAY_SECONDS = 30;
-
-    private static final int YAHOO_BATCH_5_DELAY_SECONDS = 40;
-
-    /*
-     * HTTP connection timeout.
-     */
     private static final int CONNECT_TIMEOUT = 10000;
 
-    /*
-     * HTTP read timeout.
-     */
     private static final int READ_TIMEOUT = 15000;
 
     /*
-     * Cache directory.
-     */
-    private static final String CACHE_DIRECTORY = "cache";
-
-    /*
-     * Cache file.
-     */
-    private static final String CACHE_FILE_NAME =
-            "dividend-cache.json";
-
-    /*
-     * Active price window.
-     *
-     * Only dividend shares whose ex-date is from tomorrow
-     * through the next 30 days are normally refreshed.
+     * Default window: tomorrow .. tomorrow + 30 days.
      */
     private static final int ACTIVE_PRICE_WINDOW_DAYS = 30;
 
     /*
-     * Yahoo price refresh interval.
-     *
-     * A share will not be sent to Yahoo again if it was already
-     * checked less than 1 minute ago.
+     * While the market is open, prices older than this are
+     * refreshed.
      */
-    private static final int PRICE_REFRESH_INTERVAL_MINUTES = 1;
+    private static final int LIVE_PRICE_REFRESH_SECONDS = 30;
 
     /*
-     * Dividend API refresh interval.
-     *
-     * NSE + Groww are not called on every request.
-     *
-     * Once the cache has been created, a background refresh
-     * is allowed once every 1 minute.
-     *
-     * NOTE:
-     * This is currently 1 minute for testing.
+     * After a failed Yahoo attempt for a symbol, wait this
+     * long before trying that symbol again.
      */
-    private static final int DIVIDEND_REFRESH_INTERVAL_MINUTES = 60;
+    private static final int YAHOO_FAILURE_BACKOFF_SECONDS = 120;
 
     /*
-     * If Yahoo cannot find a symbol, don't retry it on every
-     * frontend request.
+     * Symbols Yahoo does not know are retried after 2 days.
      */
     private static final int YAHOO_NOT_FOUND_RETRY_DAYS = 2;
 
     /*
-     * Trading hours:
-     *
-     * 09:00 AM to 03:35 PM IST
-     *
-     * Monday to Friday.
+     * NSE + Groww dividend check intervals.
      */
-    private static final LocalTime TRADING_START_TIME =
-            LocalTime.of(9, 0);
+    private static final int DIVIDEND_REFRESH_DAY_MINUTES = 15;
 
-    private static final LocalTime TRADING_END_TIME =
-            LocalTime.of(15, 35);
+    private static final int DIVIDEND_REFRESH_NIGHT_MINUTES = 60;
+
+    private static final LocalTime DAYTIME_START =
+            LocalTime.of(8, 0);
+
+    private static final LocalTime DAYTIME_END =
+            LocalTime.of(20, 0);
 
     /*
-     * India Standard Time.
+     * After NSE + Groww both fail, retry after 5 minutes.
      */
+    private static final long DIVIDEND_FAILURE_BACKOFF_MILLIS =
+            5L * 60L * 1000L;
+
+    /*
+     * Custom date ranges are re-fetched from NSE + Groww at
+     * most once per hour.
+     */
+    private static final long CUSTOM_RANGE_REFRESH_MILLIS =
+            60L * 60L * 1000L;
+
+    /*
+     * Background work runs only while the app was used in the
+     * last 10 minutes or a live tab is connected.
+     */
+    private static final long ACTIVITY_WINDOW_MILLIS =
+            10L * 60L * 1000L;
+
+    private static final int TICK_SECONDS = 10;
+
+    /*
+     * Backup intervals.
+     */
+    private static final int FILE_SAVE_SECONDS = 30;
+
+    private static final long NEON_PRICE_SAVE_MILLIS =
+            15L * 60L * 1000L;
+
+    /*
+     * Holiday detection: during market hours (after 09:45),
+     * if most quotes' last trade is from an earlier day, the
+     * market is closed today.
+     */
+    private static final LocalTime HOLIDAY_CHECK_AFTER =
+            LocalTime.of(9, 45);
+
     private static final ZoneId INDIA_ZONE =
-            ZoneId.of("Asia/Kolkata");
+            MarketClock.IST;
 
     /*
-     * Synchronizes cache file access.
+     * Base URLs (overridable with -D system properties for
+     * local testing only).
      */
-    private static final Object CACHE_LOCK =
-            new Object();
+    private static final String YAHOO_BASE_URL =
+            System.getProperty(
+                    "yahoo.base.url",
+                    "https://query1.finance.yahoo.com"
+            );
 
-    /*
-     * Prevents multiple background dividend refreshes from
-     * running at the same time.
-     */
-    private static final AtomicBoolean
-            BACKGROUND_REFRESH_RUNNING =
-            new AtomicBoolean(false);
+    private static final String NSE_BASE_URL =
+            System.getProperty(
+                    "nse.base.url",
+                    "https://www.nseindia.com"
+            );
 
-    /*
-     * ============================================================
-     * YAHOO BATCH REFRESH CONTROL
-     * ============================================================
-     *
-     * Prevents multiple 5-batch Yahoo refresh cycles from being
-     * scheduled at the same time.
-     *
-     * This is VERY important because the frontend may call
-     * /api/dividends repeatedly.
-     */
-    private static final AtomicBoolean
-            YAHOO_BATCH_REFRESH_RUNNING =
-            new AtomicBoolean(false);
-
-    /*
-     * ============================================================
-     * SHARED YAHOO EXECUTOR
-     * ============================================================
-     *
-     * IMPORTANT:
-     *
-     * We create this ONLY ONCE.
-     *
-     * We do NOT create a new ExecutorService every time
-     * /api/dividends is called.
-     *
-     * Maximum 8 Yahoo requests can run at once.
-     */
-    private static final ExecutorService YAHOO_EXECUTOR =
-            Executors.newFixedThreadPool(
-                    THREAD_COUNT
+    private static final String GROWW_BASE_URL =
+            System.getProperty(
+                    "groww.base.url",
+                    "https://groww.in"
             );
 
     /*
-     * ============================================================
-     * SHARED YAHOO BATCH SCHEDULER
-     * ============================================================
-     *
-     * Only one scheduler thread is needed because its job is
-     * simply to start the Yahoo batches at the correct times.
-     */
-    private static final ScheduledExecutorService
-            YAHOO_BATCH_SCHEDULER =
-            Executors.newSingleThreadScheduledExecutor();
-
-    /*
-     * Gson used for reading/writing cache JSON.
+     * Compact JSON (no pretty printing) for faster saves.
      */
     private static final Gson GSON =
             new GsonBuilder()
-                    .setPrettyPrinting()
                     .create();
 
     // ============================================================
@@ -284,16 +241,215 @@ public class DividendService {
             );
 
     // ============================================================
-    // MAIN METHOD
+    // STATE
+    // ============================================================
+
+    private final CacheStore cacheStore;
+
+    private final LiveUpdates liveUpdates;
+
+    /*
+     * Every change to "cache" happens while holding stateLock.
+     * Requests never take this lock: they read "snapshot".
+     */
+    private final Object stateLock =
+            new Object();
+
+    private CacheFile cache =
+            new CacheFile();
+
+    /*
+     * Immutable view used to answer requests (lock-free).
+     */
+    private volatile Snapshot snapshot =
+            Snapshot.EMPTY;
+
+    private volatile Set<LocalDate> holidays =
+            Collections.emptySet();
+
+    private final ReentrantLock dividendRefreshLock =
+            new ReentrantLock();
+
+    private final ReentrantLock priceRefreshLock =
+            new ReentrantLock();
+
+    private final AtomicBoolean tickQueued =
+            new AtomicBoolean(false);
+
+    private final AtomicBoolean fileDirty =
+            new AtomicBoolean(false);
+
+    private final AtomicBoolean neonDirty =
+            new AtomicBoolean(false);
+
+    private final AtomicBoolean neonUrgent =
+            new AtomicBoolean(false);
+
+    private volatile long lastNeonSaveMillis = 0L;
+
+    private volatile long lastActivityMillis =
+            System.currentTimeMillis();
+
+    private volatile long lastDividendAttemptMillis = 0L;
+
+    private final Map<String, Long> customRangeFetchedAt =
+            new ConcurrentHashMap<>();
+
+    /*
+     * Runs background refresh jobs (dividends, prices).
+     */
+    private final ExecutorService workers =
+            Executors.newFixedThreadPool(
+                    2,
+                    daemonThreads("dividend-worker")
+            );
+
+    /*
+     * Runs Yahoo spark requests in parallel.
+     */
+    private final ExecutorService yahooPool =
+            Executors.newFixedThreadPool(
+                    THREAD_COUNT,
+                    daemonThreads("yahoo")
+            );
+
+    /*
+     * Ticks, backup saves, SSE heartbeats and SSE publishing.
+     */
+    private final ScheduledExecutorService scheduler =
+            Executors.newScheduledThreadPool(
+                    2,
+                    daemonThreads("dividend-scheduler")
+            );
+
+    public DividendService(
+            CacheStore cacheStore,
+            LiveUpdates liveUpdates
+    ) {
+        this.cacheStore = cacheStore;
+        this.liveUpdates = liveUpdates;
+    }
+
+    // ============================================================
+    // STARTUP / SHUTDOWN
+    // ============================================================
+
+    @PostConstruct
+    public void start() {
+
+        CacheFile loaded = null;
+
+        String json =
+                cacheStore.loadNewest();
+
+        if (json != null) {
+            try {
+                loaded =
+                        GSON.fromJson(
+                                json,
+                                CacheFile.class
+                        );
+            } catch (Exception e) {
+                System.out.println(
+                        "Saved cache could not be parsed: "
+                                + e.getMessage()
+                );
+            }
+        }
+
+        if (loaded == null) {
+            loaded = new CacheFile();
+        }
+
+        if (loaded.dividends == null) {
+            loaded.dividends = new ArrayList<>();
+        }
+
+        loaded.dividends.removeIf(share -> share == null);
+
+        if (loaded.holidays == null) {
+            loaded.holidays = new ArrayList<>();
+        }
+
+        if (loaded.version <= 0) {
+            loaded.version = 1;
+        }
+
+        synchronized (stateLock) {
+
+            cache = loaded;
+
+            refreshHolidaySet();
+
+            boolean changed =
+                    removeExpiredCacheRecords(
+                            cache,
+                            today()
+                    );
+
+            if (applyMockData()) {
+                changed = true;
+            }
+
+            publishSnapshot(changed);
+        }
+
+        System.out.println(
+                "Dividend service ready with "
+                        + snapshot.shares.size()
+                        + " cached record(s), version "
+                        + snapshot.version
+                        + "."
+        );
+
+        /*
+         * Warm-up: lastActivityMillis = startup time, so the
+         * first ticks refresh anything that is out of date
+         * before the first visitor arrives.
+         */
+        scheduler.scheduleWithFixedDelay(
+                this::safeTick,
+                1,
+                TICK_SECONDS,
+                TimeUnit.SECONDS
+        );
+
+        scheduler.scheduleWithFixedDelay(
+                this::persistIfNeeded,
+                FILE_SAVE_SECONDS,
+                FILE_SAVE_SECONDS,
+                TimeUnit.SECONDS
+        );
+
+        scheduler.scheduleWithFixedDelay(
+                liveUpdates::heartbeat,
+                25,
+                25,
+                TimeUnit.SECONDS
+        );
+    }
+
+    @PreDestroy
+    public void stop() {
+
+        scheduler.shutdownNow();
+        workers.shutdownNow();
+        yahooPool.shutdownNow();
+
+        /*
+         * Final backup so nothing is lost on redeploy.
+         */
+        neonUrgent.set(true);
+        persistIfNeeded();
+    }
+
+    // ============================================================
+    // PUBLIC API
     // ============================================================
 
     public List<DividendResponse> getUpcomingDividends(
             DividendRequest request
     ) throws Exception {
-
-        // ========================================================
-        // 1. READ REQUEST DATES
-        // ========================================================
 
         String requestedFromDate =
                 request != null
@@ -305,496 +461,165 @@ public class DividendService {
                         ? request.getToDate()
                         : null;
 
-        // ========================================================
-        // 2. FROM DATE
-        // ========================================================
+        LocalDate today =
+                today();
 
-        LocalDate fromDateValue;
+        LocalDate fromDateValue =
+                isEmpty(requestedFromDate)
+                        ? today.plusDays(1)
+                        : parseDate(requestedFromDate, "from_date");
 
-        if (isEmpty(requestedFromDate)) {
-
-            fromDateValue =
-                    LocalDate.now(INDIA_ZONE)
-                            .plusDays(1);
-
-        } else {
-
-            fromDateValue =
-                    parseDate(
-                            requestedFromDate,
-                            "from_date"
-                    );
-        }
-
-        // ========================================================
-        // 3. TO DATE
-        // ========================================================
-
-        LocalDate toDateValue;
-
-        if (isEmpty(requestedToDate)) {
-
-            toDateValue =
-                    fromDateValue.plusDays(
-                            ACTIVE_PRICE_WINDOW_DAYS
-                    );
-
-        } else {
-
-            toDateValue =
-                    parseDate(
-                            requestedToDate,
-                            "to_date"
-                    );
-        }
-
-        // ========================================================
-        // 4. VALIDATE DATE RANGE
-        // ========================================================
+        LocalDate toDateValue =
+                isEmpty(requestedToDate)
+                        ? fromDateValue.plusDays(ACTIVE_PRICE_WINDOW_DAYS)
+                        : parseDate(requestedToDate, "to_date");
 
         if (toDateValue.isBefore(fromDateValue)) {
-
             throw new IllegalArgumentException(
                     "to_date cannot be earlier than from_date"
             );
         }
 
-        // ========================================================
-        // 5. CURRENT IST DATE
-        // ========================================================
-
-        LocalDate today =
-                LocalDate.now(INDIA_ZONE);
-
-        // ========================================================
-        // 6. CHECK TRADING TIME
-        // ========================================================
-
-        boolean tradingHours =
-                isTradingHours();
-
-        System.out.println(
-                "================================================"
-        );
-
-        System.out.println(
-                "Dividend request received"
-        );
-
-        System.out.println(
-                "From date: " + fromDateValue
-        );
-
-        System.out.println(
-                "To date: " + toDateValue
-        );
-
-        System.out.println(
-                "IST time: "
-                        + LocalDateTime.now(INDIA_ZONE)
-        );
-
-        System.out.println(
-                "Trading hours: "
-                        + tradingHours
-        );
-
-        System.out.println(
-                "================================================"
-        );
-
-        // ========================================================
-        // 7. LOAD CACHE
-        // ========================================================
-
-        CacheFile cache =
-                loadCache();
-
-        boolean cacheChanged =
-                removeExpiredCacheRecords(
-                        cache,
-                        today
-                );
-
-        // ========================================================
-        // 8. DETERMINE CACHE COVERAGE
-        // ========================================================
-
-        boolean requestInsideNormalWindow =
-                isInsideActiveWindow(
-                        fromDateValue,
-                        toDateValue,
-                        today
-                );
-
-        // ========================================================
-        // 9. CACHE DOES NOT EXIST / REQUEST OUTSIDE CACHE WINDOW
-        // ========================================================
-
-        if (!requestInsideNormalWindow
-                || cache.dividends.isEmpty()) {
-
-            System.out.println(
-                    "Cache does not fully cover request."
-            );
-
-            System.out.println(
-                    "Fetching NSE + Groww dividend data..."
-            );
-
-            List<DividendData> freshDividendData =
-                    fetchDividendDataFromApis(
-                            fromDateValue,
-                            toDateValue
-                    );
-
-            if (!freshDividendData.isEmpty()) {
-
-                for (DividendData fresh :
-                        freshDividendData) {
-
-                    if (fresh == null
-                            || isEmpty(fresh.symbol)) {
-
-                        continue;
-                    }
-
-                    boolean changed =
-                            addOrUpdateDividendInCache(
-                                    cache,
-                                    fresh
-                            );
-
-                    if (changed) {
-
-                        cacheChanged = true;
-                    }
-                }
-            }
-        }
-
-        // ========================================================
-        // 10. MOCK DATA
-        // ========================================================
+        touch();
 
         /*
-         * IMPORTANT:
-         *
-         * MockData is now handled in two ways:
-         *
-         * 1. If MockData.hasMockData() == true:
-         *      Existing mock records are merged into cache.
-         *
-         * 2. If MockData.hasMockData() == false:
-         *      Any previously cached MOCK records are removed.
-         *
-         * This allows old mock records to be automatically
-         * removed from dividend-cache.json after MockData.java
-         * is cleared.
+         * First run ever (no saved data): load synchronously
+         * so the first visitor does not get an empty page.
          */
+        if (!snapshot.dividendsLoaded) {
+            refreshDividends(true);
+            refreshPrices(true);
+        }
 
-        if (MockData.hasMockData()) {
-
-            System.out.println(
-                    "MockData detected."
+        /*
+         * Custom range outside the default window.
+         */
+        if (!isInsideActiveWindow(
+                fromDateValue,
+                toDateValue,
+                today
+        )) {
+            ensureCustomRange(
+                    fromDateValue,
+                    toDateValue
             );
+        }
 
-            List<DividendData> mockDividendShares =
-                    convertMockDataToDividendData();
+        kick();
 
-            for (DividendData mock :
-                    mockDividendShares) {
+        return buildResponse(
+                snapshot,
+                fromDateValue,
+                toDateValue
+        );
+    }
 
-                if (mock == null) {
+    public String getCacheVersion() {
 
-                    continue;
-                }
+        touch();
+        kick();
 
-                boolean changed =
-                        mergeSingleDividendIntoCache(
-                                cache,
-                                mock
-                        );
+        return String.valueOf(
+                snapshot.version
+        );
+    }
 
-                if (changed) {
+    /**
+     * Version + price freshness, used by /version and pushed
+     * to live tabs.
+     */
+    public Map<String, Object> getStatus() {
 
-                    cacheChanged = true;
-                }
-            }
+        Snapshot current =
+                snapshot;
 
+        LocalDateTime now =
+                MarketClock.now();
+
+        Set<LocalDate> currentHolidays =
+                holidays;
+
+        boolean marketOpen =
+                MarketClock.isMarketOpen(
+                        now,
+                        currentHolidays
+                );
+
+        LocalDateTime lastClose =
+                MarketClock.lastSettledClose(
+                        now,
+                        currentHolidays
+                );
+
+        LocalDateTime pricesAsOf =
+                parseDateTime(current.pricesAsOf);
+
+        String priceStatus;
+
+        if (marketOpen) {
+            priceStatus = "LIVE";
+        } else if (pricesAsOf != null
+                && !pricesAsOf.isBefore(lastClose)) {
+            priceStatus = "CLOSING";
         } else {
-
-            /*
-             * MockData.java currently contains no mock data.
-             *
-             * Remove any MOCK records that were previously
-             * stored in the persistent cache.
-             */
-            boolean mockRecordsRemoved =
-                    removeCachedMockRecords(
-                            cache
-                    );
-
-            if (mockRecordsRemoved) {
-
-                cacheChanged = true;
-            }
+            priceStatus = "UPDATING";
         }
 
-        // ========================================================
-        // 11. SAVE CACHE AFTER SYNCHRONOUS DIVIDEND PROCESSING
-        // ========================================================
+        Map<String, Object> status =
+                new LinkedHashMap<>();
 
-        if (cacheChanged) {
+        status.put("version", String.valueOf(current.version));
+        status.put("pricesAsOf", current.pricesAsOf);
+        status.put("marketOpen", marketOpen);
+        status.put("priceStatus", priceStatus);
+        status.put("lastCloseDate", lastClose.toLocalDate().toString());
 
-            saveCache(
-                    cache,
-                    true
-            );
-        }
+        return status;
+    }
 
-        // ========================================================
-        // 12. START BACKGROUND DIVIDEND REFRESH
-        // ========================================================
+    /**
+     * Called when a browser tab opens the live stream.
+     */
+    public void onLiveSubscriber() {
+        touch();
+        kick();
+    }
 
-        startBackgroundDividendRefreshIfNeeded(
-                cache
-        );
+    // ============================================================
+    // RESPONSE (from snapshot only)
+    // ============================================================
 
-        // ========================================================
-        // 13. FIND RECORDS FOR REQUEST
-        // ========================================================
-
-        List<DividendData> requestedShares =
-                getSharesForRequestedDateRange(
-                        cache.dividends,
-                        fromDateValue,
-                        toDateValue
-                );
-
-        // ========================================================
-        // 14. PRICE UPDATE LOGIC
-        // ========================================================
-
-        /*
-         * ========================================================
-         * IMPORTANT CHANGE
-         * ========================================================
-         *
-         * Previously:
-         *
-         * /api/dividends
-         *      |
-         *      +--> Yahoo 400+ shares
-         *      |
-         *      +--> WAIT
-         *      |
-         *      +--> return response
-         *
-         * That could make the API take 3-10+ seconds.
-         *
-         * NOW:
-         *
-         * /api/dividends
-         *      |
-         *      +--> read cache
-         *      |
-         *      +--> schedule Yahoo batches
-         *      |
-         *      +--> return cached response
-         *
-         * Yahoo runs AFTER the API response.
-         *
-         * This is the main performance improvement.
-         */
-
-        if (tradingHours) {
-
-            System.out.println(
-                    "Inside trading hours."
-            );
-
-            System.out.println(
-                    "Yahoo price refresh will run in background batches."
-            );
-
-            startBackgroundYahooBatchRefreshIfNeeded(
-                    cache.dividends,
-                    today
-            );
-
-        } else {
-
-            System.out.println(
-                    "Outside trading hours / weekend."
-            );
-
-            System.out.println(
-                    "Existing cached prices will be reused."
-            );
-
-            /*
-             * Outside trading hours we still need to support
-             * newly discovered shares that have no price.
-             *
-             * Instead of waiting for Yahoo, these are also
-             * processed in the background.
-             */
-            List<DividendData> sharesWithoutPrice =
-                    getSharesWithoutPrice(
-                            requestedShares
-                    );
-
-            if (!sharesWithoutPrice.isEmpty()) {
-
-                System.out.println(
-                        "Found "
-                                + sharesWithoutPrice.size()
-                                + " share(s) without cached price."
-                );
-
-                startBackgroundYahooBatchRefreshForList(
-                        sharesWithoutPrice
-                );
-            }
-        }
-
-        // ========================================================
-        // 15. READ REQUEST DATA FROM CACHE
-        // ========================================================
-
-        /*
-         * We intentionally DO NOT wait for Yahoo here.
-         *
-         * The current cached price is returned immediately.
-         *
-         * Once background Yahoo batches finish, the cache is
-         * updated and the frontend version endpoint can detect
-         * the change.
-         */
-
-        requestedShares =
-                getSharesForRequestedDateRange(
-                        cache.dividends,
-                        fromDateValue,
-                        toDateValue
-                );
-
-        // ========================================================
-        // 15b. SYNCHRONOUS PRICE TOP-UP FOR THIS RESPONSE
-        // ========================================================
-
-        /*
-         * Without this step, a cold cache (first request of the
-         * day, after Render restarts the container and the local
-         * cache file is gone) would return an EMPTY array here:
-         *
-         * Dividend records get fetched from NSE/Groww above, but
-         * none of them have a Yahoo price yet - prices are
-         * normally filled in later by the background batches,
-         * AFTER this method already returned. Step 16 below then
-         * removes every share without a price, leaving [].
-         *
-         * To avoid that, we synchronously fetch prices for ONLY
-         * the shares missing from THIS response (not the full
-         * 30-day window - that stays on the background batches
-         * started above) so the caller gets real data on the
-         * very first request instead of having to try again a
-         * minute later.
-         */
-
-        List<DividendData> missingPriceForResponse =
-                getSharesWithoutPrice(
-                        requestedShares
-                );
-
-        if (!missingPriceForResponse.isEmpty()) {
-
-            System.out.println(
-                    "Synchronously fetching Yahoo prices for "
-                            + missingPriceForResponse.size()
-                            + " share(s) missing from this response."
-            );
-
-            boolean topUpChanged =
-                    fetchYahooPricesInParallel(
-                            missingPriceForResponse
-                    );
-
-            if (topUpChanged) {
-
-                saveCache(
-                        cache,
-                        true
-                );
-            }
-        }
-
-        // ========================================================
-        // 16. REMOVE INVALID NORMAL RECORDS
-        // ========================================================
-
-        requestedShares.removeIf(
-                share -> {
-
-                    if (share == null) {
-
-                        return true;
-                    }
-
-                    if ("MOCK".equalsIgnoreCase(
-                            share.source
-                    )) {
-
-                        return false;
-                    }
-
-                    return isEmpty(
-                            share.currentSharePrice
-                    )
-                            || "N/A".equalsIgnoreCase(
-                            share.currentSharePrice
-                    );
-                }
-        );
-
-        // ========================================================
-        // 17. CREATE RESPONSE
-        // ========================================================
-
+    private List<DividendResponse> buildResponse(
+            Snapshot current,
+            LocalDate fromDate,
+            LocalDate toDate
+    ) {
         List<DividendResponse> response =
-                new ArrayList<>(
-                        requestedShares.size()
-                );
+                new ArrayList<>();
 
         for (DividendData share :
-                requestedShares) {
+                current.shares) {
 
-            if (share == null) {
+            LocalDate exDate =
+                    parseCachedExDate(share.exDate);
 
+            if (exDate == null
+                    || exDate.isBefore(fromDate)
+                    || exDate.isAfter(toDate)) {
                 continue;
             }
 
-            Double dividendAmount =
-                    parseDoubleOrNull(
-                            share.dividendAmount
-                    );
+            boolean mock =
+                    "MOCK".equalsIgnoreCase(share.source);
 
             Double currentPrice =
-                    parseDoubleOrNull(
-                            share.currentSharePrice
-                    );
+                    parseDoubleOrNull(share.currentSharePrice);
 
-            Double previousPrice =
-                    parseDoubleOrNull(
-                            share.chartPreviousClose
-                    );
-
-            if (currentPrice == null
-                    && !"MOCK".equalsIgnoreCase(
-                    share.source
-            )) {
-
+            /*
+             * Shares without a price yet are added a few
+             * seconds later (pushed to the page live).
+             */
+            if (currentPrice == null && !mock) {
                 continue;
             }
 
@@ -803,24 +628,1139 @@ public class DividendService {
                             share.shareName,
                             share.symbol,
                             share.exDate,
-                            dividendAmount,
+                            parseDoubleOrNull(share.dividendAmount),
                             currentPrice,
-                            previousPrice
+                            parseDoubleOrNull(share.chartPreviousClose)
                     )
             );
         }
 
-        System.out.println(
-                "Returning "
-                        + response.size()
-                        + " dividend record(s) to frontend."
-        );
-
-        System.out.println(
-                "================================================"
-        );
-
         return response;
+    }
+
+    // ============================================================
+    // CUSTOM DATE RANGE (outside default window)
+    // ============================================================
+
+    private void ensureCustomRange(
+            LocalDate fromDate,
+            LocalDate toDate
+    ) {
+        String key =
+                fromDate + "|" + toDate;
+
+        long nowMillis =
+                System.currentTimeMillis();
+
+        Long fetchedAt =
+                customRangeFetchedAt.get(key);
+
+        if (fetchedAt != null
+                && nowMillis - fetchedAt < CUSTOM_RANGE_REFRESH_MILLIS) {
+            return;
+        }
+
+        if (customRangeFetchedAt.size() > 200) {
+            customRangeFetchedAt.clear();
+        }
+
+        customRangeFetchedAt.put(key, nowMillis);
+
+        List<DividendData> fresh =
+                fetchDividendDataFromApis(
+                        fromDate,
+                        toDate
+                );
+
+        boolean changed = false;
+
+        synchronized (stateLock) {
+
+            for (DividendData incoming : fresh) {
+
+                if (incoming == null
+                        || isEmpty(incoming.symbol)) {
+                    continue;
+                }
+
+                LocalDate exDate =
+                        parseCachedExDate(incoming.exDate);
+
+                /*
+                 * Past ex-dates are not kept in the cache.
+                 */
+                if (exDate == null
+                        || exDate.isBefore(today())) {
+                    continue;
+                }
+
+                if (addOrUpdateDividendInCache(cache, incoming)) {
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                neonUrgent.set(true);
+                publishSnapshot(true);
+            }
+        }
+
+        /*
+         * One-time synchronous price fetch for newly found
+         * shares in this range.
+         */
+        if (changed) {
+            refreshPrices(true);
+        }
+    }
+
+    // ============================================================
+    // BACKGROUND TICK
+    // ============================================================
+
+    private void touch() {
+        lastActivityMillis = System.currentTimeMillis();
+    }
+
+    /**
+     * Runs a tick soon without blocking the caller.
+     */
+    private void kick() {
+
+        if (!tickQueued.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            scheduler.execute(() -> {
+                tickQueued.set(false);
+                safeTick();
+            });
+        } catch (Exception e) {
+            tickQueued.set(false);
+        }
+    }
+
+    private void safeTick() {
+        try {
+            tick();
+        } catch (Throwable t) {
+            System.out.println(
+                    "Background tick failed: "
+                            + t.getMessage()
+            );
+        }
+    }
+
+    private void tick() {
+
+        boolean active =
+                liveUpdates.hasSubscribers()
+                        || System.currentTimeMillis() - lastActivityMillis
+                        < ACTIVITY_WINDOW_MILLIS;
+
+        if (!active) {
+            return;
+        }
+
+        /*
+         * Drop records whose ex-date has passed (date change).
+         */
+        synchronized (stateLock) {
+            if (removeExpiredCacheRecords(cache, today())) {
+                publishSnapshot(true);
+            }
+        }
+
+        if (isDividendRefreshDue()
+                && !dividendRefreshLock.isLocked()) {
+            submit(() -> refreshDividends(false));
+        }
+
+        if (hasPricesDue()
+                && !priceRefreshLock.isLocked()) {
+            submit(() -> refreshPrices(false));
+        }
+    }
+
+    private void submit(Runnable job) {
+        try {
+            workers.execute(() -> {
+                try {
+                    job.run();
+                } catch (Throwable t) {
+                    System.out.println(
+                            "Background job failed: "
+                                    + t.getMessage()
+                    );
+                }
+            });
+        } catch (Exception ignored) {
+            // shutting down
+        }
+    }
+
+    // ============================================================
+    // DIVIDEND REFRESH (NSE + Groww)
+    // ============================================================
+
+    private boolean isDividendRefreshDue() {
+
+        long nowMillis =
+                System.currentTimeMillis();
+
+        if (nowMillis - lastDividendAttemptMillis
+                < DIVIDEND_FAILURE_BACKOFF_MILLIS) {
+            return false;
+        }
+
+        LocalDateTime lastRefresh =
+                parseDateTime(snapshot.lastDividendApiRefresh);
+
+        if (lastRefresh == null) {
+            return true;
+        }
+
+        LocalDateTime now =
+                MarketClock.now();
+
+        boolean daytime =
+                MarketClock.isTradingDay(now.toLocalDate(), holidays)
+                        && !now.toLocalTime().isBefore(DAYTIME_START)
+                        && now.toLocalTime().isBefore(DAYTIME_END);
+
+        int intervalMinutes =
+                daytime
+                        ? DIVIDEND_REFRESH_DAY_MINUTES
+                        : DIVIDEND_REFRESH_NIGHT_MINUTES;
+
+        return !now.isBefore(
+                lastRefresh.plusMinutes(intervalMinutes)
+        );
+    }
+
+    /**
+     * @param waitForResult true = first-run load: wait for
+     *                      any running refresh instead of
+     *                      skipping.
+     */
+    private void refreshDividends(boolean waitForResult) {
+
+        if (waitForResult) {
+            dividendRefreshLock.lock();
+        } else if (!dividendRefreshLock.tryLock()) {
+            return;
+        }
+
+        boolean newRecords = false;
+
+        try {
+            if (waitForResult) {
+                /*
+                 * Another thread may have loaded data while we
+                 * waited, or the APIs failed moments ago.
+                 */
+                if (snapshot.dividendsLoaded
+                        || System.currentTimeMillis() - lastDividendAttemptMillis
+                        < DIVIDEND_FAILURE_BACKOFF_MILLIS) {
+                    return;
+                }
+            } else if (!isDividendRefreshDue()) {
+                return;
+            }
+
+            lastDividendAttemptMillis =
+                    System.currentTimeMillis();
+
+            /*
+             * Same window as isInsideActiveWindow:
+             * today .. tomorrow + 30 days.
+             */
+            LocalDate fromDate =
+                    today();
+
+            LocalDate toDate =
+                    today().plusDays(1 + ACTIVE_PRICE_WINDOW_DAYS);
+
+            List<DividendData> fresh =
+                    fetchDividendDataFromApis(
+                            fromDate,
+                            toDate
+                    );
+
+            if (fresh.isEmpty()) {
+                System.out.println(
+                        "NSE + Groww returned no dividends. "
+                                + "Keeping existing data; retry in 5 minutes."
+                );
+                return;
+            }
+
+            synchronized (stateLock) {
+
+                boolean changed = false;
+
+                for (DividendData incoming : fresh) {
+
+                    if (incoming == null
+                            || isEmpty(incoming.symbol)) {
+                        continue;
+                    }
+
+                    boolean isNew =
+                            findCachedDividend(cache, incoming) == null;
+
+                    if (addOrUpdateDividendInCache(cache, incoming)) {
+                        changed = true;
+
+                        if (isNew) {
+                            newRecords = true;
+                        }
+                    }
+                }
+
+                cache.lastDividendApiRefresh =
+                        MarketClock.now().toString();
+
+                if (changed) {
+                    neonUrgent.set(true);
+                }
+
+                publishSnapshot(changed);
+            }
+
+        } finally {
+            dividendRefreshLock.unlock();
+        }
+
+        /*
+         * New dividend announced: fetch its price right away.
+         */
+        if (newRecords) {
+            kick();
+        }
+    }
+
+    // ============================================================
+    // PRICE REFRESH (Yahoo)
+    // ============================================================
+
+    private boolean hasPricesDue() {
+
+        LocalDateTime now =
+                MarketClock.now();
+
+        LocalDate today =
+                now.toLocalDate();
+
+        for (DividendData share : snapshot.shares) {
+            if (isPriceTarget(share, today)
+                    && needsPrice(share, now)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean isPriceTarget(
+            DividendData share,
+            LocalDate today
+    ) {
+        if (share == null
+                || isEmpty(share.symbol)
+                || "MOCK".equalsIgnoreCase(share.source)) {
+            return false;
+        }
+
+        LocalDate exDate =
+                parseCachedExDate(share.exDate);
+
+        return exDate != null
+                && !exDate.isBefore(today);
+    }
+
+    /**
+     * The core freshness rule.
+     */
+    private boolean needsPrice(
+            DividendData share,
+            LocalDateTime now
+    ) {
+        LocalDateTime lastAttempt =
+                parseDateTime(share.lastYahooAttempt);
+
+        if ("NOT_FOUND".equalsIgnoreCase(share.yahooStatus)) {
+            return lastAttempt == null
+                    || !now.isBefore(
+                    lastAttempt.plusDays(YAHOO_NOT_FOUND_RETRY_DAYS)
+            );
+        }
+
+        LocalDateTime asOf =
+                parseDateTime(share.priceAsOf);
+
+        boolean lastAttemptFailed =
+                lastAttempt != null
+                        && (asOf == null || lastAttempt.isAfter(asOf));
+
+        if (lastAttemptFailed
+                && now.isBefore(
+                lastAttempt.plusSeconds(YAHOO_FAILURE_BACKOFF_SECONDS)
+        )) {
+            return false;
+        }
+
+        if (!hasPrice(share) || asOf == null) {
+            return true;
+        }
+
+        Set<LocalDate> currentHolidays =
+                holidays;
+
+        if (MarketClock.isMarketOpen(now, currentHolidays)) {
+            return !now.isBefore(
+                    asOf.plusSeconds(LIVE_PRICE_REFRESH_SECONDS)
+            );
+        }
+
+        /*
+         * Market closed: only if the price is older than the
+         * last settled close (e.g. fetched at 2 PM, now 6 PM).
+         */
+        return asOf.isBefore(
+                MarketClock.lastSettledClose(now, currentHolidays)
+        );
+    }
+
+    private boolean hasPrice(DividendData share) {
+        return !isEmpty(share.currentSharePrice)
+                && !"N/A".equalsIgnoreCase(share.currentSharePrice);
+    }
+
+    /**
+     * @param waitForResult true = caller needs prices now
+     *                      (first run / custom range).
+     */
+    private void refreshPrices(boolean waitForResult) {
+
+        if (waitForResult) {
+            priceRefreshLock.lock();
+        } else if (!priceRefreshLock.tryLock()) {
+            return;
+        }
+
+        try {
+            LocalDateTime now =
+                    MarketClock.now();
+
+            LocalDate today =
+                    now.toLocalDate();
+
+            List<String> symbols =
+                    new ArrayList<>();
+
+            synchronized (stateLock) {
+                for (DividendData share : cache.dividends) {
+
+                    if (!isPriceTarget(share, today)
+                            || !needsPrice(share, now)) {
+                        continue;
+                    }
+
+                    String symbol =
+                            normalizeSymbol(share.symbol);
+
+                    if (!symbols.contains(symbol)) {
+                        symbols.add(symbol);
+                    }
+                }
+            }
+
+            if (symbols.isEmpty()) {
+                return;
+            }
+
+            QuoteResult result =
+                    fetchQuotes(symbols);
+
+            applyQuotes(
+                    symbols,
+                    result,
+                    now
+            );
+
+        } finally {
+            priceRefreshLock.unlock();
+        }
+    }
+
+    private void applyQuotes(
+            List<String> requestedSymbols,
+            QuoteResult result,
+            LocalDateTime attemptTime
+    ) {
+        String attempt =
+                attemptTime.toString();
+
+        Set<String> requested =
+                new HashSet<>(requestedSymbols);
+
+        synchronized (stateLock) {
+
+            boolean visibleChange = false;
+
+            for (DividendData share : cache.dividends) {
+
+                if (share == null
+                        || isEmpty(share.symbol)) {
+                    continue;
+                }
+
+                String symbol =
+                        normalizeSymbol(share.symbol);
+
+                if (!requested.contains(symbol)) {
+                    continue;
+                }
+
+                share.lastYahooAttempt = attempt;
+
+                YahooQuote quote =
+                        result.quotes.get(symbol);
+
+                if (quote != null) {
+
+                    if (!safeEquals(share.currentSharePrice, quote.price)) {
+                        share.currentSharePrice = quote.price;
+                        visibleChange = true;
+                    }
+
+                    if (!isEmpty(quote.previousClose)
+                            && !safeEquals(share.chartPreviousClose, quote.previousClose)) {
+                        share.chartPreviousClose = quote.previousClose;
+                        visibleChange = true;
+                    }
+
+                    if (!isEmpty(share.yahooStatus)) {
+                        share.yahooStatus = null;
+                        visibleChange = true;
+                    }
+
+                    share.priceAsOf = attempt;
+                    share.marketTime = quote.marketTime;
+
+                } else if (result.answeredSymbols.contains(symbol)) {
+
+                    /*
+                     * Yahoo answered but has no price for it.
+                     */
+                    if (isEmpty(share.currentSharePrice)) {
+                        share.currentSharePrice = "N/A";
+                    }
+
+                    if (isEmpty(share.chartPreviousClose)) {
+                        share.chartPreviousClose = "N/A";
+                    }
+
+                    if (!"NOT_FOUND".equalsIgnoreCase(share.yahooStatus)) {
+                        share.yahooStatus = "NOT_FOUND";
+                        visibleChange = true;
+                    }
+                }
+            }
+
+            if (!result.quotes.isEmpty()) {
+                cache.lastPriceRefresh = attempt;
+                detectHoliday(result, attemptTime);
+            }
+
+            publishSnapshot(visibleChange);
+        }
+
+        System.out.println(
+                "Yahoo: "
+                        + result.quotes.size()
+                        + "/"
+                        + requestedSymbols.size()
+                        + " price(s) updated in "
+                        + result.requestCount
+                        + " request(s)."
+        );
+    }
+
+    /**
+     * If the market should be open but most last-trade times
+     * are from an earlier day, today is a holiday.
+     */
+    private void detectHoliday(
+            QuoteResult result,
+            LocalDateTime now
+    ) {
+        if (!MarketClock.isMarketOpen(now, holidays)
+                || now.toLocalTime().isBefore(HOLIDAY_CHECK_AFTER)) {
+            return;
+        }
+
+        LocalDate today =
+                now.toLocalDate();
+
+        int withTime = 0;
+        int stale = 0;
+
+        for (YahooQuote quote : result.quotes.values()) {
+
+            LocalDateTime marketTime =
+                    parseDateTime(quote.marketTime);
+
+            if (marketTime == null) {
+                continue;
+            }
+
+            withTime++;
+
+            if (marketTime.toLocalDate().isBefore(today)) {
+                stale++;
+            }
+        }
+
+        if (withTime >= 5
+                && stale * 10 >= withTime * 8) {
+
+            String day =
+                    today.toString();
+
+            if (!cache.holidays.contains(day)) {
+                cache.holidays.add(day);
+
+                /*
+                 * Keep only recent holidays.
+                 */
+                cache.holidays.removeIf(value -> {
+                    LocalDate date = parseCachedExDate(value);
+                    return date == null
+                            || date.isBefore(today.minusDays(30));
+                });
+
+                refreshHolidaySet();
+
+                System.out.println(
+                        "Market holiday detected for "
+                                + day
+                                + ". Live price refresh paused until next session."
+                );
+            }
+        }
+    }
+
+    private void refreshHolidaySet() {
+
+        Set<LocalDate> set =
+                new HashSet<>();
+
+        for (String value : cache.holidays) {
+            LocalDate date =
+                    parseCachedExDate(value);
+
+            if (date != null) {
+                set.add(date);
+            }
+        }
+
+        holidays = Collections.unmodifiableSet(set);
+    }
+
+    // ============================================================
+    // YAHOO SPARK (20 symbols per request)
+    // ============================================================
+
+    private QuoteResult fetchQuotes(List<String> symbols) {
+
+        QuoteResult result =
+                new QuoteResult();
+
+        List<CompletableFuture<QuoteResult>> futures =
+                new ArrayList<>();
+
+        for (int start = 0;
+             start < symbols.size();
+             start += YAHOO_SPARK_BATCH_SIZE) {
+
+            List<String> chunk =
+                    new ArrayList<>(
+                            symbols.subList(
+                                    start,
+                                    Math.min(
+                                            start + YAHOO_SPARK_BATCH_SIZE,
+                                            symbols.size()
+                                    )
+                            )
+                    );
+
+            futures.add(
+                    CompletableFuture.supplyAsync(
+                            () -> fetchQuoteChunk(chunk),
+                            yahooPool
+                    )
+            );
+        }
+
+        for (CompletableFuture<QuoteResult> future : futures) {
+            try {
+                QuoteResult part =
+                        future.get(60, TimeUnit.SECONDS);
+
+                result.quotes.putAll(part.quotes);
+                result.answeredSymbols.addAll(part.answeredSymbols);
+                result.requestCount += part.requestCount;
+
+            } catch (Exception e) {
+                System.out.println(
+                        "Yahoo batch failed: "
+                                + e.getMessage()
+                );
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * One spark request for up to 20 symbols. If spark fails
+     * (blocked / changed), falls back to the per-symbol chart
+     * endpoint for this chunk so prices still update.
+     */
+    private QuoteResult fetchQuoteChunk(List<String> symbols) {
+
+        QuoteResult result =
+                new QuoteResult();
+
+        StringBuilder joined =
+                new StringBuilder();
+
+        for (String symbol : symbols) {
+
+            if (joined.length() > 0) {
+                joined.append(',');
+            }
+
+            joined.append(encode(symbol + ".NS"));
+        }
+
+        String url =
+                YAHOO_BASE_URL
+                        + "/v7/finance/spark?symbols="
+                        + joined
+                        + "&range=1d&interval=1d";
+
+        try {
+            result.requestCount++;
+
+            String response =
+                    fetchResponse(
+                            url,
+                            "https://finance.yahoo.com/"
+                    );
+
+            parseSpark(response, result);
+
+            /*
+             * Spark answered: every requested symbol counts as
+             * answered (missing ones are NOT_FOUND).
+             */
+            result.answeredSymbols.addAll(symbols);
+
+            return result;
+
+        } catch (Exception e) {
+            System.out.println(
+                    "Yahoo spark failed ("
+                            + e.getMessage()
+                            + "). Falling back to per-symbol requests."
+            );
+        }
+
+        for (String symbol : symbols) {
+            try {
+                result.requestCount++;
+
+                String response =
+                        fetchResponse(
+                                YAHOO_BASE_URL
+                                        + "/v8/finance/chart/"
+                                        + encode(symbol + ".NS")
+                                        + "?range=1d&interval=1d",
+                                "https://finance.yahoo.com/"
+                        );
+
+                result.answeredSymbols.add(symbol);
+
+                JsonObject root =
+                        JsonParser.parseString(response).getAsJsonObject();
+
+                JsonArray chartResults =
+                        root.getAsJsonObject("chart")
+                                .getAsJsonArray("result");
+
+                if (chartResults != null
+                        && chartResults.size() > 0
+                        && chartResults.get(0).isJsonObject()) {
+
+                    YahooQuote quote =
+                            parseQuote(chartResults.get(0).getAsJsonObject());
+
+                    if (quote != null) {
+                        result.quotes.put(symbol, quote);
+                    }
+                }
+
+            } catch (Exception e) {
+                /*
+                 * HTTP 404 = Yahoo does not know the symbol.
+                 */
+                if (e.getMessage() != null
+                        && e.getMessage().contains("HTTP 404")) {
+                    result.answeredSymbols.add(symbol);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private void parseSpark(
+            String response,
+            QuoteResult result
+    ) {
+        JsonObject root =
+                JsonParser.parseString(response).getAsJsonObject();
+
+        JsonObject spark =
+                root.getAsJsonObject("spark");
+
+        if (spark == null) {
+            throw new IllegalStateException("Unexpected spark response");
+        }
+
+        JsonArray results =
+                spark.getAsJsonArray("result");
+
+        if (results == null) {
+            return;
+        }
+
+        for (JsonElement element : results) {
+
+            if (element == null
+                    || !element.isJsonObject()) {
+                continue;
+            }
+
+            JsonObject item =
+                    element.getAsJsonObject();
+
+            String yahooSymbol =
+                    getStringValue(item, "symbol");
+
+            JsonArray responses =
+                    item.getAsJsonArray("response");
+
+            if (yahooSymbol == null
+                    || responses == null
+                    || responses.size() == 0
+                    || !responses.get(0).isJsonObject()) {
+                continue;
+            }
+
+            YahooQuote quote =
+                    parseQuote(responses.get(0).getAsJsonObject());
+
+            if (quote == null) {
+                continue;
+            }
+
+            String symbol =
+                    normalizeSymbol(yahooSymbol);
+
+            if (symbol.endsWith(".NS")) {
+                symbol = symbol.substring(0, symbol.length() - 3);
+            }
+
+            result.quotes.put(symbol, quote);
+        }
+    }
+
+    /**
+     * Reads price / previous close / last trade time from a
+     * spark or chart result ("meta" + "indicators").
+     */
+    private YahooQuote parseQuote(JsonObject chartResult) {
+
+        JsonObject meta =
+                chartResult.has("meta")
+                        && chartResult.get("meta").isJsonObject()
+                        ? chartResult.getAsJsonObject("meta")
+                        : null;
+
+        if (meta == null) {
+            return null;
+        }
+
+        String price =
+                getFormattedNumber(meta, "regularMarketPrice");
+
+        /*
+         * Fallback: last valid close in indicators.
+         */
+        if ("N/A".equalsIgnoreCase(price)) {
+            try {
+                JsonArray closes =
+                        chartResult.getAsJsonObject("indicators")
+                                .getAsJsonArray("quote")
+                                .get(0).getAsJsonObject()
+                                .getAsJsonArray("close");
+
+                for (int i = closes.size() - 1; i >= 0; i--) {
+                    if (!closes.get(i).isJsonNull()
+                            && closes.get(i).getAsDouble() > 0) {
+                        price = formatPrice(closes.get(i).getAsDouble());
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {
+                // no indicators
+            }
+        }
+
+        if ("N/A".equalsIgnoreCase(price)) {
+            return null;
+        }
+
+        String previousClose =
+                getFormattedNumber(meta, "chartPreviousClose");
+
+        if ("N/A".equalsIgnoreCase(previousClose)) {
+            previousClose =
+                    getFormattedNumber(meta, "previousClose");
+        }
+
+        YahooQuote quote =
+                new YahooQuote();
+
+        quote.price = price;
+        quote.previousClose =
+                "N/A".equalsIgnoreCase(previousClose)
+                        ? null
+                        : previousClose;
+
+        try {
+            if (meta.has("regularMarketTime")
+                    && !meta.get("regularMarketTime").isJsonNull()) {
+
+                long epochSeconds =
+                        meta.get("regularMarketTime").getAsLong();
+
+                quote.marketTime =
+                        LocalDateTime.ofInstant(
+                                Instant.ofEpochSecond(epochSeconds),
+                                INDIA_ZONE
+                        ).toString();
+            }
+        } catch (Exception ignored) {
+            // optional field
+        }
+
+        return quote;
+    }
+
+    private String encode(String value) {
+        try {
+            return URLEncoder.encode(
+                    value,
+                    StandardCharsets.UTF_8.name()
+            );
+        } catch (Exception e) {
+            return value;
+        }
+    }
+
+    // ============================================================
+    // SNAPSHOT + BACKUP
+    // ============================================================
+
+    /**
+     * Must be called while holding stateLock.
+     */
+    private void publishSnapshot(boolean dataChanged) {
+
+        Snapshot previous =
+                snapshot;
+
+        if (dataChanged) {
+            cache.version++;
+        }
+
+        cache.lastUpdated =
+                MarketClock.now().toString();
+
+        List<DividendData> copies =
+                new ArrayList<>(cache.dividends.size());
+
+        for (DividendData share : cache.dividends) {
+            if (share != null) {
+                copies.add(share.copy());
+            }
+        }
+
+        Snapshot next =
+                new Snapshot(
+                        Collections.unmodifiableList(copies),
+                        cache.version,
+                        cache.lastPriceRefresh,
+                        cache.lastDividendApiRefresh,
+                        !isEmpty(cache.lastDividendApiRefresh)
+                                || !cache.dividends.isEmpty()
+                );
+
+        snapshot = next;
+
+        fileDirty.set(true);
+        neonDirty.set(true);
+
+        boolean statusChanged =
+                previous.version != next.version
+                        || !safeEquals(previous.pricesAsOf, next.pricesAsOf);
+
+        if (statusChanged
+                && liveUpdates.hasSubscribers()) {
+            try {
+                scheduler.execute(
+                        () -> liveUpdates.publish(getStatus())
+                );
+            } catch (Exception ignored) {
+                // shutting down
+            }
+        }
+    }
+
+    private void persistIfNeeded() {
+
+        try {
+            if (fileDirty.getAndSet(false)) {
+                cacheStore.saveFile(serializeCache());
+            }
+
+            if (!cacheStore.isNeonEnabled()
+                    || !neonDirty.get()) {
+                return;
+            }
+
+            long nowMillis =
+                    System.currentTimeMillis();
+
+            boolean due =
+                    neonUrgent.get()
+                            || nowMillis - lastNeonSaveMillis >= NEON_PRICE_SAVE_MILLIS;
+
+            if (!due) {
+                return;
+            }
+
+            neonDirty.set(false);
+            neonUrgent.set(false);
+
+            String json;
+            long version;
+
+            synchronized (stateLock) {
+                json = GSON.toJson(cache);
+                version = cache.version;
+            }
+
+            if (cacheStore.saveNeon(json, version)) {
+                lastNeonSaveMillis = nowMillis;
+            } else {
+                neonDirty.set(true);
+                lastNeonSaveMillis = nowMillis;
+            }
+
+        } catch (Throwable t) {
+            System.out.println(
+                    "Backup failed: "
+                            + t.getMessage()
+            );
+        }
+    }
+
+    private String serializeCache() {
+        synchronized (stateLock) {
+            return GSON.toJson(cache);
+        }
+    }
+
+    // ============================================================
+    // MOCK DATA (static, applied at startup)
+    // ============================================================
+
+    /**
+     * Must be called while holding stateLock.
+     */
+    private boolean applyMockData() {
+
+        if (!MockData.hasMockData()) {
+            return removeCachedMockRecords(cache);
+        }
+
+        boolean changed = false;
+
+        for (DividendData mock :
+                convertMockDataToDividendData()) {
+
+            if (mock != null
+                    && mergeSingleDividendIntoCache(cache, mock)) {
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    // ============================================================
+    // SMALL HELPERS
+    // ============================================================
+
+    private static LocalDate today() {
+        return LocalDate.now(INDIA_ZONE);
+    }
+
+    private static LocalDateTime parseDateTime(String value) {
+
+        if (value == null
+                || value.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            return LocalDateTime.parse(value.trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static ThreadFactory daemonThreads(String prefix) {
+
+        AtomicInteger counter =
+                new AtomicInteger(1);
+
+        return runnable -> {
+            Thread thread =
+                    new Thread(
+                            runnable,
+                            prefix + "-" + counter.getAndIncrement()
+                    );
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     // ============================================================
@@ -889,837 +1829,6 @@ public class DividendService {
     }
 
     // ============================================================
-    // CACHE VERSION
-    // ============================================================
-
-    public String getCacheVersion() {
-
-        CacheFile cache =
-                loadCache();
-
-        /*
-         * Old cache files created before the version feature
-         * may have version = 0.
-         *
-         * Treat them as version 1.
-         */
-        if (cache.version <= 0) {
-
-            return "1";
-        }
-
-        return String.valueOf(
-                cache.version
-        );
-    }
-
-    // ============================================================
-    // BACKGROUND DIVIDEND REFRESH
-    // ============================================================
-
-    private void startBackgroundDividendRefreshIfNeeded(
-            CacheFile currentCache
-    ) {
-
-        if (currentCache == null) {
-
-            return;
-        }
-
-        if (!shouldRefreshDividendApis(
-                currentCache
-        )) {
-
-            return;
-        }
-
-        if (!BACKGROUND_REFRESH_RUNNING.compareAndSet(
-                false,
-                true
-        )) {
-
-            System.out.println(
-                    "Dividend background refresh is already running."
-            );
-
-            return;
-        }
-
-        /*
-         * Mark the API refresh attempt immediately.
-         *
-         * This changes only cache metadata.
-         *
-         * Therefore saveCache(..., false) is used.
-         */
-        synchronized (CACHE_LOCK) {
-
-            CacheFile latestCache =
-                    loadCache();
-
-            latestCache.lastDividendApiRefresh =
-                    LocalDateTime.now(
-                            INDIA_ZONE
-                    ).toString();
-
-            saveCache(
-                    latestCache,
-                    false
-            );
-        }
-
-        CompletableFuture.runAsync(
-                () -> {
-
-                    try {
-
-                        performBackgroundDividendRefresh();
-
-                    } catch (Exception e) {
-
-                        System.out.println(
-                                "Background dividend refresh failed: "
-                                        + e.getMessage()
-                        );
-
-                    } finally {
-
-                        BACKGROUND_REFRESH_RUNNING.set(
-                                false
-                        );
-                    }
-                }
-        );
-    }
-
-    // ============================================================
-    // CHECK DIVIDEND REFRESH TIME
-    // ============================================================
-
-    private boolean shouldRefreshDividendApis(
-            CacheFile cache
-    ) {
-
-        if (cache == null) {
-
-            return true;
-        }
-
-        if (isEmpty(
-                cache.lastDividendApiRefresh
-        )) {
-
-            return true;
-        }
-
-        try {
-
-            LocalDateTime lastRefresh =
-                    LocalDateTime.parse(
-                            cache.lastDividendApiRefresh
-                    );
-
-            LocalDateTime nextRefresh =
-                    lastRefresh.plusMinutes(
-                            DIVIDEND_REFRESH_INTERVAL_MINUTES
-                    );
-
-            return !LocalDateTime.now(
-                    INDIA_ZONE
-            ).isBefore(
-                    nextRefresh
-            );
-
-        } catch (Exception e) {
-
-            return true;
-        }
-    }
-
-    // ============================================================
-    // PERFORM BACKGROUND DIVIDEND REFRESH
-    // ============================================================
-
-    private void performBackgroundDividendRefresh() {
-
-        LocalDate today =
-                LocalDate.now(
-                        INDIA_ZONE
-                );
-
-        LocalDate refreshFromDate =
-                today.plusDays(1);
-
-        LocalDate refreshToDate =
-                refreshFromDate.plusDays(
-                        ACTIVE_PRICE_WINDOW_DAYS
-                );
-
-        System.out.println(
-                "------------------------------------------------"
-        );
-
-        System.out.println(
-                "Background dividend refresh started."
-        );
-
-        System.out.println(
-                "Refreshing dividend window: "
-                        + refreshFromDate
-                        + " -> "
-                        + refreshToDate
-        );
-
-        List<DividendData> freshDividendData =
-                fetchDividendDataFromApis(
-                        refreshFromDate,
-                        refreshToDate
-                );
-
-        if (freshDividendData == null
-                || freshDividendData.isEmpty()) {
-
-            System.out.println(
-                    "Background dividend refresh found no new data."
-            );
-
-            System.out.println(
-                    "------------------------------------------------"
-            );
-
-            return;
-        }
-
-        CacheFile cache =
-                loadCache();
-
-        boolean cacheChanged = false;
-
-        List<DividendData> newlyAddedDividends =
-                new ArrayList<>();
-
-        for (DividendData fresh :
-                freshDividendData) {
-
-            if (fresh == null
-                    || isEmpty(fresh.symbol)) {
-
-                continue;
-            }
-
-            DividendData existingBeforeMerge =
-                    findCachedDividend(
-                            cache,
-                            fresh
-                    );
-
-            boolean wasNewRecord =
-                    existingBeforeMerge == null;
-
-            boolean changed =
-                    addOrUpdateDividendInCache(
-                            cache,
-                            fresh
-                    );
-
-            if (changed) {
-
-                cacheChanged = true;
-
-                if (wasNewRecord) {
-
-                    DividendData cached =
-                            findCachedDividend(
-                                    cache,
-                                    fresh
-                            );
-
-                    if (cached != null) {
-
-                        newlyAddedDividends.add(
-                                cached
-                        );
-                    }
-                }
-            }
-        }
-
-        // ========================================================
-        // SAVE CHANGED DIVIDEND DATA
-        // ========================================================
-
-        if (cacheChanged) {
-
-            saveCache(
-                    cache,
-                    true
-            );
-        }
-
-        // ========================================================
-        // NEW DIVIDEND PRICE LOOKUP
-        // ========================================================
-
-        if (!newlyAddedDividends.isEmpty()) {
-
-            System.out.println(
-                    "New dividend records discovered: "
-                            + newlyAddedDividends.size()
-            );
-
-            /*
-             * Do NOT wait for Yahoo here.
-             *
-             * Newly discovered shares are added to the normal
-             * background Yahoo batching system.
-             */
-            startBackgroundYahooBatchRefreshForList(
-                    newlyAddedDividends
-            );
-        }
-
-        System.out.println(
-                "Background dividend refresh completed."
-        );
-
-        System.out.println(
-                "------------------------------------------------"
-        );
-    }
-
-    // ============================================================
-    // START YAHOO BACKGROUND BATCH REFRESH
-    // ============================================================
-
-    private void startBackgroundYahooBatchRefreshIfNeeded(
-            List<DividendData> allShares,
-            LocalDate today
-    ) {
-
-        if (allShares == null
-                || allShares.isEmpty()) {
-
-            return;
-        }
-
-        List<DividendData> eligibleShares =
-                getSharesForActivePriceRefresh(
-                        allShares,
-                        today
-                );
-
-        if (eligibleShares.isEmpty()) {
-
-            System.out.println(
-                    "No Yahoo price refresh is currently required."
-            );
-
-            return;
-        }
-
-        startBackgroundYahooBatchRefreshForList(
-                eligibleShares
-        );
-    }
-
-    // ============================================================
-    // START YAHOO BATCH REFRESH FOR LIST
-    // ============================================================
-
-    private void startBackgroundYahooBatchRefreshForList(
-            List<DividendData> shares
-    ) {
-
-        if (shares == null
-                || shares.isEmpty()) {
-
-            return;
-        }
-
-        /*
-         * Prevent another 5-batch cycle from being created while
-         * the current cycle is still running.
-         *
-         * This is important because the frontend may call
-         * /api/dividends every minute.
-         */
-        if (!YAHOO_BATCH_REFRESH_RUNNING.compareAndSet(
-                false,
-                true
-        )) {
-
-            System.out.println(
-                    "Yahoo batch refresh is already scheduled/running."
-            );
-
-            return;
-        }
-
-        /*
-         * Re-load the cache before creating the batch list.
-         *
-         * This ensures that we work with the newest cached data.
-         */
-        CacheFile latestCache =
-                loadCache();
-
-        List<DividendData> freshEligibleShares =
-                new ArrayList<>();
-
-        /*
-         * Re-map the supplied symbols to the latest cache
-         * objects.
-         *
-         * This avoids using stale object references when the
-         * cache has been changed by another background operation.
-         */
-        for (DividendData supplied :
-                shares) {
-
-            if (supplied == null
-                    || isEmpty(supplied.symbol)) {
-
-                continue;
-            }
-
-            DividendData latest =
-                    findCachedDividend(
-                            latestCache,
-                            supplied
-                    );
-
-            if (latest == null) {
-
-                continue;
-            }
-
-            if (!shouldAttemptYahoo(
-                    latest
-            )) {
-
-                continue;
-            }
-
-            if ("MOCK".equalsIgnoreCase(
-                    latest.source
-            )) {
-
-                continue;
-            }
-
-            freshEligibleShares.add(
-                    latest
-            );
-        }
-
-        if (freshEligibleShares.isEmpty()) {
-
-            YAHOO_BATCH_REFRESH_RUNNING.set(
-                    false
-            );
-
-            return;
-        }
-
-        /*
-         * Divide the list into up to 5 batches.
-         */
-        List<List<DividendData>> batches =
-                createYahooBatches(
-                        freshEligibleShares
-                );
-
-        System.out.println(
-                "================================================"
-        );
-
-        System.out.println(
-                "Yahoo background batch refresh scheduled."
-        );
-
-        System.out.println(
-                "Total Yahoo shares: "
-                        + freshEligibleShares.size()
-        );
-
-        System.out.println(
-                "Total batches: "
-                        + batches.size()
-        );
-
-        for (int i = 0;
-             i < batches.size();
-             i++) {
-
-            System.out.println(
-                    "Batch "
-                            + (i + 1)
-                            + " size: "
-                            + batches.get(i).size()
-            );
-        }
-
-        System.out.println(
-                "================================================"
-        );
-
-        scheduleYahooBatches(
-                batches
-        );
-    }
-
-    // ============================================================
-    // CREATE YAHOO BATCHES
-    // ============================================================
-
-    private List<List<DividendData>>
-    createYahooBatches(
-            List<DividendData> shares
-    ) {
-
-        List<List<DividendData>> batches =
-                new ArrayList<>();
-
-        if (shares == null
-                || shares.isEmpty()) {
-
-            return batches;
-        }
-
-        /*
-         * We don't create 5 empty batches.
-         *
-         * Example:
-         *
-         * 20 shares -> 5 batches
-         * each approximately 4
-         *
-         * 2 shares -> only 2 batches.
-         */
-        int actualBatchCount =
-                Math.min(
-                        YAHOO_BATCH_COUNT,
-                        shares.size()
-                );
-
-        int batchSize =
-                (int) Math.ceil(
-                        (double) shares.size()
-                                / actualBatchCount
-                );
-
-        for (int start = 0;
-             start < shares.size();
-             start += batchSize) {
-
-            int end =
-                    Math.min(
-                            start + batchSize,
-                            shares.size()
-                    );
-
-            List<DividendData> batch =
-                    new ArrayList<>(
-                            shares.subList(
-                                    start,
-                                    end
-                            )
-                    );
-
-            batches.add(
-                    batch
-            );
-        }
-
-        return batches;
-    }
-
-    // ============================================================
-    // SCHEDULE YAHOO BATCHES
-    // ============================================================
-
-    private void scheduleYahooBatches(
-            List<List<DividendData>> batches
-    ) {
-
-        if (batches == null
-                || batches.isEmpty()) {
-
-            YAHOO_BATCH_REFRESH_RUNNING.set(
-                    false
-            );
-
-            return;
-        }
-
-        /*
-         * Delay values for the 5 batches.
-         */
-        int[] delays = {
-                YAHOO_BATCH_1_DELAY_SECONDS,
-                YAHOO_BATCH_2_DELAY_SECONDS,
-                YAHOO_BATCH_3_DELAY_SECONDS,
-                YAHOO_BATCH_4_DELAY_SECONDS,
-                YAHOO_BATCH_5_DELAY_SECONDS
-        };
-
-        for (int i = 0;
-             i < batches.size();
-             i++) {
-
-            final int batchNumber =
-                    i + 1;
-
-            final List<DividendData> batch =
-                    batches.get(i);
-
-            int delaySeconds =
-                    delays[
-                            Math.min(
-                                    i,
-                                    delays.length - 1
-                            )
-                            ];
-
-            System.out.println(
-                    "Scheduling Yahoo Batch "
-                            + batchNumber
-                            + " after "
-                            + delaySeconds
-                            + " seconds."
-            );
-
-            YAHOO_BATCH_SCHEDULER.schedule(
-                    () -> {
-
-                        try {
-
-                            processYahooBatch(
-                                    batchNumber,
-                                    batch
-                            );
-
-                        } catch (Exception e) {
-
-                            System.out.println(
-                                    "Yahoo Batch "
-                                            + batchNumber
-                                            + " failed: "
-                                            + e.getMessage()
-                            );
-
-                        } finally {
-
-                            /*
-                             * The final batch marks the entire
-                             * refresh cycle as complete.
-                             */
-                            if (batchNumber
-                                    == batches.size()) {
-
-                                YAHOO_BATCH_REFRESH_RUNNING.set(
-                                        false
-                                );
-
-                                System.out.println(
-                                        "================================================"
-                                );
-
-                                System.out.println(
-                                        "Yahoo background batch refresh completed."
-                                );
-
-                                System.out.println(
-                                        "================================================"
-                                );
-                            }
-                        }
-
-                    },
-                    delaySeconds,
-                    TimeUnit.SECONDS
-            );
-        }
-    }
-
-    // ============================================================
-    // PROCESS ONE YAHOO BATCH
-    // ============================================================
-
-    private void processYahooBatch(
-            int batchNumber,
-            List<DividendData> batch
-    ) {
-
-        if (batch == null
-                || batch.isEmpty()) {
-
-            System.out.println(
-                    "Yahoo Batch "
-                            + batchNumber
-                            + " is empty."
-            );
-
-            return;
-        }
-
-        System.out.println(
-                "------------------------------------------------"
-        );
-
-        System.out.println(
-                "Yahoo Batch "
-                        + batchNumber
-                        + " started."
-        );
-
-        System.out.println(
-                "Batch size: "
-                        + batch.size()
-        );
-
-        System.out.println(
-                "Start time: "
-                        + LocalDateTime.now(
-                        INDIA_ZONE
-                )
-        );
-
-        /*
-         * Re-check the cache before processing.
-         *
-         * Some shares may have already been updated by another
-         * operation while the batch was waiting for its delay.
-         */
-        CacheFile latestCache =
-                loadCache();
-
-        List<DividendData> validBatch =
-                new ArrayList<>();
-
-        for (DividendData supplied :
-                batch) {
-
-            if (supplied == null
-                    || isEmpty(supplied.symbol)) {
-
-                continue;
-            }
-
-            DividendData latest =
-                    findCachedDividend(
-                            latestCache,
-                            supplied
-                    );
-
-            if (latest == null) {
-
-                continue;
-            }
-
-            if (!shouldAttemptYahoo(
-                    latest
-            )) {
-
-                continue;
-            }
-
-            if ("MOCK".equalsIgnoreCase(
-                    latest.source
-            )) {
-
-                continue;
-            }
-
-            validBatch.add(
-                    latest
-            );
-        }
-
-        if (validBatch.isEmpty()) {
-
-            System.out.println(
-                    "Yahoo Batch "
-                            + batchNumber
-                            + " has no shares requiring refresh."
-            );
-
-            System.out.println(
-                    "------------------------------------------------"
-            );
-
-            return;
-        }
-
-        /*
-         * Send this batch to Yahoo.
-         *
-         * IMPORTANT:
-         *
-         * fetchYahooPricesInParallel() now uses the SHARED
-         * executor instead of creating a new executor.
-         */
-        boolean priceChanged =
-                fetchYahooPricesInParallel(
-                        validBatch
-                );
-
-        /*
-         * Save ONCE after the entire batch finishes.
-         *
-         * This is much better for Render memory and disk usage.
-         */
-        if (priceChanged) {
-
-            CacheFile cacheAfterYahoo =
-                    loadCache();
-
-            /*
-             * The objects inside validBatch are from the cache
-             * object loaded above. Save that same object if
-             * possible.
-             *
-             * Because fetchYahooPricesInParallel modified these
-             * objects directly, they contain the new prices.
-             */
-            saveCache(
-                    latestCache,
-                    true
-            );
-
-            System.out.println(
-                    "Yahoo Batch "
-                            + batchNumber
-                            + " changed frontend-visible data."
-            );
-
-        } else {
-
-            System.out.println(
-                    "Yahoo Batch "
-                            + batchNumber
-                            + " did not change frontend-visible data."
-            );
-        }
-
-        System.out.println(
-                "Yahoo Batch "
-                        + batchNumber
-                        + " completed."
-        );
-
-        System.out.println(
-                "End time: "
-                        + LocalDateTime.now(
-                        INDIA_ZONE
-                ));
-
-        System.out.println(
-                "------------------------------------------------"
-        );
-    }
-
-    // ============================================================
     // FETCH DIVIDEND APIS
     // ============================================================
 
@@ -1749,7 +1858,7 @@ public class DividendService {
                 toDateValue.toString();
 
         String nseApiUrl =
-                "https://www.nseindia.com/api/"
+                NSE_BASE_URL + "/api/"
                         + "corporates-corporateActions"
                         + "?index=equities"
                         + "&from_date=" + nseFromDate
@@ -1757,7 +1866,7 @@ public class DividendService {
                         + "&category=dividend";
 
         String growwApiUrl =
-                "https://groww.in/v1/api/"
+                GROWW_BASE_URL + "/v1/api/"
                         + "stocks_data/equity_feature/v2/"
                         + "corporate_action/event"
                         + "?from=" + growwFromDate
@@ -1862,236 +1971,6 @@ public class DividendService {
     }
 
     // ============================================================
-    // CACHE
-    // ============================================================
-
-    private CacheFile loadCache() {
-
-        synchronized (CACHE_LOCK) {
-
-            File cacheFile =
-                    getCacheFile();
-
-            if (!cacheFile.exists()) {
-
-                System.out.println(
-                        "Cache file does not exist."
-                );
-
-                System.out.println(
-                        "A new cache will be created."
-                );
-
-                return new CacheFile();
-            }
-
-            try (
-                    FileReader reader =
-                            new FileReader(cacheFile)
-            ) {
-
-                CacheFile cache =
-                        GSON.fromJson(
-                                reader,
-                                CacheFile.class
-                        );
-
-                if (cache == null) {
-
-                    return new CacheFile();
-                }
-
-                if (cache.dividends == null) {
-
-                    cache.dividends =
-                            new ArrayList<>();
-                }
-
-                /*
-                 * Backward compatibility.
-                 */
-                if (cache.version <= 0) {
-
-                    cache.version = 1;
-                }
-
-                return cache;
-
-            } catch (Exception e) {
-
-                System.out.println(
-                        "Cache file could not be read: "
-                                + e.getMessage()
-                );
-
-                return new CacheFile();
-            }
-        }
-    }
-
-    // ============================================================
-    // SAVE CACHE
-    // ============================================================
-
-    private void saveCache(
-            CacheFile cache,
-            boolean dataChanged
-    ) {
-
-        synchronized (CACHE_LOCK) {
-
-            try {
-
-                if (cache == null) {
-
-                    return;
-                }
-
-                /*
-                 * Make sure version always has a valid value.
-                 */
-                if (cache.version <= 0) {
-
-                    cache.version = 1;
-                }
-
-                /*
-                 * Only increment the version when actual
-                 * frontend-visible data has changed.
-                 */
-                if (dataChanged) {
-
-                    cache.version++;
-                }
-
-                /*
-                 * lastUpdated is only metadata.
-                 */
-                cache.lastUpdated =
-                        LocalDateTime.now(
-                                INDIA_ZONE
-                        ).toString();
-
-                File directory =
-                        new File(
-                                CACHE_DIRECTORY
-                        );
-
-                if (!directory.exists()) {
-
-                    boolean created =
-                            directory.mkdirs();
-
-                    if (!created
-                            && !directory.exists()) {
-
-                        System.out.println(
-                                "Could not create cache directory."
-                        );
-
-                        return;
-                    }
-                }
-
-                File cacheFile =
-                        getCacheFile();
-
-                File temporaryFile =
-                        new File(
-                                CACHE_DIRECTORY,
-                                CACHE_FILE_NAME
-                                        + ".tmp"
-                        );
-
-                try (
-                        FileWriter writer =
-                                new FileWriter(
-                                        temporaryFile
-                                )
-                ) {
-
-                    GSON.toJson(
-                            cache,
-                            writer
-                    );
-                }
-
-                if (cacheFile.exists()) {
-
-                    if (!cacheFile.delete()) {
-
-                        System.out.println(
-                                "Could not delete old cache file."
-                        );
-
-                        return;
-                    }
-                }
-
-                if (!temporaryFile.renameTo(
-                        cacheFile
-                )) {
-
-                    System.out.println(
-                            "Could not rename temporary cache file."
-                    );
-
-                    return;
-                }
-
-                System.out.println(
-                        "Cache saved successfully."
-                );
-
-                System.out.println(
-                        "Cache version: "
-                                + cache.version
-                );
-
-                if (dataChanged) {
-
-                    System.out.println(
-                            "Frontend-visible cache data changed."
-                    );
-
-                    System.out.println(
-                            "Cache version incremented."
-                    );
-
-                } else {
-
-                    System.out.println(
-                            "Only cache metadata changed."
-                    );
-
-                    System.out.println(
-                            "Cache version was not incremented."
-                    );
-                }
-
-            } catch (Exception e) {
-
-                System.out.println(
-                        "Cache save failed: "
-                                + e.getMessage()
-                );
-            }
-        }
-    }
-
-    // ============================================================
-    // CACHE FILE PATH
-    // ============================================================
-
-    private File getCacheFile() {
-
-        return new File(
-                CACHE_DIRECTORY,
-                CACHE_FILE_NAME
-        );
-    }
-
-    // ============================================================
     // REMOVE EXPIRED DATA
     // ============================================================
 
@@ -2160,12 +2039,20 @@ public class DividendService {
             LocalDate today
     ) {
 
+        /*
+         * FIX: the cached window is today .. tomorrow + 30 days.
+         *
+         * Previously it ended at today + 30, one day short of
+         * the default request (tomorrow .. tomorrow + 30), so
+         * every default load and every Search was treated as a
+         * custom range and called NSE + Groww live.
+         */
         LocalDate activeStart =
-                today.plusDays(1);
+                today;
 
         LocalDate activeEnd =
                 today.plusDays(
-                        ACTIVE_PRICE_WINDOW_DAYS
+                        1 + ACTIVE_PRICE_WINDOW_DAYS
                 );
 
         return !fromDate.isBefore(activeStart)
@@ -2221,323 +2108,6 @@ public class DividendService {
         }
 
         return result;
-    }
-
-    // ============================================================
-    // ACTIVE PRICE REFRESH
-    // ============================================================
-
-    private List<DividendData>
-    getSharesForActivePriceRefresh(
-            List<DividendData> allShares,
-            LocalDate today
-    ) {
-
-        List<DividendData> result =
-                new ArrayList<>();
-
-        if (allShares == null
-                || allShares.isEmpty()) {
-
-            return result;
-        }
-
-        LocalDate activeStart =
-                today.plusDays(1);
-
-        LocalDate activeEnd =
-                today.plusDays(
-                        ACTIVE_PRICE_WINDOW_DAYS
-                );
-
-        for (DividendData share :
-                allShares) {
-
-            if (share == null
-                    || isEmpty(share.exDate)
-                    || isEmpty(share.symbol)) {
-
-                continue;
-            }
-
-            LocalDate exDate =
-                    parseCachedExDate(
-                            share.exDate
-                    );
-
-            if (exDate == null) {
-
-                continue;
-            }
-
-            if (exDate.isBefore(activeStart)
-                    || exDate.isAfter(activeEnd)) {
-
-                continue;
-            }
-
-            if ("MOCK".equalsIgnoreCase(
-                    share.source
-            )
-                    && !isEmpty(
-                    share.currentSharePrice
-            )
-                    && !"N/A".equalsIgnoreCase(
-                    share.currentSharePrice
-            )) {
-
-                continue;
-            }
-
-            if (!shouldAttemptYahoo(
-                    share
-            )) {
-
-                continue;
-            }
-
-            result.add(share);
-        }
-
-        return result;
-    }
-
-    // ============================================================
-    // SHARES WITHOUT PRICE
-    // ============================================================
-
-    private List<DividendData>
-    getSharesWithoutPrice(
-            List<DividendData> requestedShares
-    ) {
-
-        List<DividendData> result =
-                new ArrayList<>();
-
-        if (requestedShares == null
-                || requestedShares.isEmpty()) {
-
-            return result;
-        }
-
-        for (DividendData share :
-                requestedShares) {
-
-            if (share == null) {
-
-                continue;
-            }
-
-            if ("MOCK".equalsIgnoreCase(
-                    share.source
-            )) {
-
-                continue;
-            }
-
-            if (!isEmpty(
-                    share.currentSharePrice
-            )
-                    && !"N/A".equalsIgnoreCase(
-                    share.currentSharePrice
-            )) {
-
-                continue;
-            }
-
-            if (!shouldAttemptYahoo(
-                    share
-            )) {
-
-                continue;
-            }
-
-            result.add(share);
-        }
-
-        return result;
-    }
-
-    // ============================================================
-    // BACKWARD COMPATIBILITY
-    // ============================================================
-
-    private List<DividendData>
-    getNewSharesWithoutPrice(
-            List<DividendData> requestedShares
-    ) {
-
-        return getSharesWithoutPrice(
-                requestedShares
-        );
-    }
-
-    // ============================================================
-    // CHECK WHETHER YAHOO SHOULD BE CALLED
-    // ============================================================
-
-    private boolean shouldAttemptYahoo(
-            DividendData share
-    ) {
-
-        if (share == null
-                || isEmpty(share.symbol)) {
-
-            return false;
-        }
-
-        if ("MOCK".equalsIgnoreCase(
-                share.source
-        )) {
-
-            return false;
-        }
-
-        if ("NOT_FOUND".equalsIgnoreCase(
-                share.yahooStatus
-        )) {
-
-            if (isEmpty(
-                    share.lastYahooAttempt
-            )) {
-
-                return true;
-            }
-
-            try {
-
-                LocalDateTime lastAttempt =
-                        LocalDateTime.parse(
-                                share.lastYahooAttempt
-                        );
-
-                LocalDateTime retryAfter =
-                        lastAttempt.plusDays(
-                                YAHOO_NOT_FOUND_RETRY_DAYS
-                        );
-
-                boolean retry =
-                        !LocalDateTime.now(
-                                INDIA_ZONE
-                        ).isBefore(
-                                retryAfter
-                        );
-
-                if (!retry) {
-
-                    System.out.println(
-                            "Skipping Yahoo for "
-                                    + share.symbol
-                                    + " - previously NOT_FOUND."
-                    );
-                }
-
-                return retry;
-
-            } catch (Exception e) {
-
-                return true;
-            }
-        }
-
-        // ========================================================
-        // IMPORTANT 1-MINUTE PRICE CACHE
-        // ========================================================
-
-        if (!isEmpty(
-                share.lastYahooAttempt
-        )) {
-
-            try {
-
-                LocalDateTime lastAttempt =
-                        LocalDateTime.parse(
-                                share.lastYahooAttempt
-                        );
-
-                LocalDateTime nextAllowedAttempt =
-                        lastAttempt.plusMinutes(
-                                PRICE_REFRESH_INTERVAL_MINUTES
-                        );
-
-                boolean allowed =
-                        !LocalDateTime.now(
-                                INDIA_ZONE
-                        ).isBefore(
-                                nextAllowedAttempt
-                        );
-
-                if (!allowed) {
-
-                    System.out.println(
-                            "Skipping Yahoo for "
-                                    + share.symbol
-                                    + " - refreshed less than "
-                                    + PRICE_REFRESH_INTERVAL_MINUTES
-                                    + " minute ago."
-                    );
-                }
-
-                return allowed;
-
-            } catch (Exception e) {
-
-                return true;
-            }
-        }
-
-        return true;
-    }
-
-    // ============================================================
-    // MERGE FRESH DATA INTO CACHE
-    // ============================================================
-
-    private boolean mergeFreshDataIntoCache(
-            CacheFile cache,
-            List<DividendData> freshData
-    ) {
-
-        boolean changed = false;
-
-        if (cache == null) {
-
-            return false;
-        }
-
-        if (cache.dividends == null) {
-
-            cache.dividends =
-                    new ArrayList<>();
-        }
-
-        if (freshData == null) {
-
-            return false;
-        }
-
-        for (DividendData fresh :
-                freshData) {
-
-            if (fresh == null
-                    || isEmpty(fresh.symbol)) {
-
-                continue;
-            }
-
-            boolean merged =
-                    mergeSingleDividendIntoCache(
-                            cache,
-                            fresh
-                    );
-
-            if (merged) {
-
-                changed = true;
-            }
-        }
-
-        return changed;
     }
 
     // ============================================================
@@ -3038,37 +2608,6 @@ public class DividendService {
     }
 
     // ============================================================
-    // TRADING HOURS
-    // ============================================================
-
-    private boolean isTradingHours() {
-
-        LocalDateTime now =
-                LocalDateTime.now(
-                        INDIA_ZONE
-                );
-
-        DayOfWeek day =
-                now.getDayOfWeek();
-
-        if (day == DayOfWeek.SATURDAY
-                || day == DayOfWeek.SUNDAY) {
-
-            return false;
-        }
-
-        LocalTime time =
-                now.toLocalTime();
-
-        return !time.isBefore(
-                TRADING_START_TIME
-        )
-                && !time.isAfter(
-                TRADING_END_TIME
-        );
-    }
-
-    // ============================================================
     // NSE REQUEST
     // ============================================================
 
@@ -3093,20 +2632,6 @@ public class DividendService {
         return fetchResponse(
                 apiUrl,
                 "https://groww.in/"
-        );
-    }
-
-    // ============================================================
-    // YAHOO REQUEST
-    // ============================================================
-
-    private String fetchYahooResponse(
-            String apiUrl
-    ) throws Exception {
-
-        return fetchResponse(
-                apiUrl,
-                "https://finance.yahoo.com/"
         );
     }
 
@@ -3637,461 +3162,6 @@ public class DividendService {
     }
 
     // ============================================================
-    // YAHOO PARALLEL PROCESSING
-    // ============================================================
-
-    private boolean fetchYahooPricesInParallel(
-            List<DividendData> dividendShares
-    ) {
-
-        if (dividendShares == null
-                || dividendShares.isEmpty()) {
-
-            return false;
-        }
-
-        List<DividendData> sharesForYahoo =
-                new ArrayList<>();
-
-        for (DividendData share :
-                dividendShares) {
-
-            if (share == null) {
-
-                continue;
-            }
-
-            if ("MOCK".equalsIgnoreCase(
-                    share.source
-            )) {
-
-                continue;
-            }
-
-            if (isEmpty(share.symbol)) {
-
-                continue;
-            }
-
-            if (!shouldAttemptYahoo(
-                    share
-            )) {
-
-                continue;
-            }
-
-            sharesForYahoo.add(
-                    share
-            );
-        }
-
-        if (sharesForYahoo.isEmpty()) {
-
-            return false;
-        }
-
-        System.out.println(
-                "Yahoo price requests in this batch: "
-                        + sharesForYahoo.size()
-        );
-
-        /*
-         * ========================================================
-         * IMPORTANT CHANGE
-         * ========================================================
-         *
-         * We DO NOT create:
-         *
-         * Executors.newFixedThreadPool(...)
-         *
-         * here anymore.
-         *
-         * We use the shared YAHOO_EXECUTOR.
-         *
-         * This prevents creating a new group of threads for every
-         * request/batch.
-         */
-
-        List<CompletableFuture<Boolean>> futures =
-                new ArrayList<>();
-
-        for (DividendData share :
-                sharesForYahoo) {
-
-            CompletableFuture<Boolean> future =
-                    CompletableFuture.supplyAsync(
-                            () -> fetchYahooSingleSymbol(
-                                    share
-                            ),
-                            YAHOO_EXECUTOR
-                    );
-
-            futures.add(
-                    future
-            );
-        }
-
-        CompletableFuture.allOf(
-                futures.toArray(
-                        new CompletableFuture[0]
-                )
-        ).join();
-
-        boolean changed = false;
-
-        for (CompletableFuture<Boolean> future :
-                futures) {
-
-            try {
-
-                if (Boolean.TRUE.equals(
-                        future.join()
-                )) {
-
-                    changed = true;
-                }
-
-            } catch (Exception e) {
-
-                System.out.println(
-                        "Yahoo future failed: "
-                                + e.getMessage()
-                );
-            }
-        }
-
-        return changed;
-    }
-
-    // ============================================================
-    // YAHOO SINGLE SYMBOL
-    // ============================================================
-
-    private boolean fetchYahooSingleSymbol(
-            DividendData share
-    ) {
-
-        if (share == null
-                || isEmpty(share.symbol)) {
-
-            return false;
-        }
-
-        String symbol =
-                normalizeSymbol(
-                        share.symbol
-                );
-
-        String yahooSymbol =
-                symbol + ".NS";
-
-        String encodedYahooSymbol;
-
-        try {
-
-            encodedYahooSymbol =
-                    URLEncoder.encode(
-                            yahooSymbol,
-                            StandardCharsets.UTF_8.name()
-                    );
-
-        } catch (Exception e) {
-
-            System.out.println(
-                    "Could not encode Yahoo symbol: "
-                            + yahooSymbol
-            );
-
-            return false;
-        }
-
-        String yahooApiUrl =
-                "https://query1.finance.yahoo.com/"
-                        + "v8/finance/chart/"
-                        + encodedYahooSymbol
-                        + "?range=1d"
-                        + "&interval=1d";
-
-        System.out.println(
-                "Calling Yahoo for: "
-                        + yahooSymbol
-        );
-
-        String attemptTime =
-                LocalDateTime.now(
-                        INDIA_ZONE
-                ).toString();
-
-        /*
-         * Store the attempt time before the HTTP request.
-         *
-         * This prevents repeated requests if Yahoo is slow
-         * or temporarily unavailable.
-         */
-        share.lastYahooAttempt =
-                attemptTime;
-
-        try {
-
-            String response =
-                    fetchYahooResponse(
-                            yahooApiUrl
-                    );
-
-            YahooPriceData yahooData =
-                    extractYahooChartPrice(
-                            response
-                    );
-
-            if (yahooData == null
-                    || isEmpty(
-                    yahooData.currentSharePrice
-            )
-                    || "N/A".equalsIgnoreCase(
-                    yahooData.currentSharePrice
-            )) {
-
-                return handleYahooNotFound(
-                        share
-                );
-            }
-
-            boolean changed = false;
-
-            if (!safeEquals(
-                    share.currentSharePrice,
-                    yahooData.currentSharePrice
-            )) {
-
-                share.currentSharePrice =
-                        yahooData.currentSharePrice;
-
-                changed = true;
-            }
-
-            if (!safeEquals(
-                    share.chartPreviousClose,
-                    yahooData.chartPreviousClose
-            )) {
-
-                share.chartPreviousClose =
-                        yahooData.chartPreviousClose;
-
-                changed = true;
-            }
-
-            /*
-             * Successful Yahoo response clears previous
-             * NOT_FOUND state.
-             */
-            if (!isEmpty(
-                    share.yahooStatus
-            )) {
-
-                share.yahooStatus =
-                        null;
-
-                changed = true;
-            }
-
-            System.out.println(
-                    "Yahoo price updated: "
-                            + symbol
-                            + " = "
-                            + share.currentSharePrice
-                            + " | Previous Close = "
-                            + share.chartPreviousClose
-            );
-
-            return changed;
-
-        } catch (Exception e) {
-
-            /*
-             * Network/API failure is NOT treated as NOT_FOUND.
-             *
-             * Existing cached prices are preserved.
-             */
-            System.out.println(
-                    "Yahoo request failed for "
-                            + yahooSymbol
-                            + ": "
-                            + e.getMessage()
-            );
-
-            return false;
-        }
-    }
-
-    // ============================================================
-    // HANDLE YAHOO NOT FOUND
-    // ============================================================
-
-    private boolean handleYahooNotFound(
-            DividendData share
-    ) {
-
-        if (share == null) {
-
-            return false;
-        }
-
-        boolean changed = false;
-
-        /*
-         * Only replace the price with N/A if there is no valid
-         * cached price already.
-         */
-        if (isEmpty(
-                share.currentSharePrice
-        )) {
-
-            share.currentSharePrice =
-                    "N/A";
-
-            changed = true;
-        }
-
-        if (isEmpty(
-                share.chartPreviousClose
-        )) {
-
-            share.chartPreviousClose =
-                    "N/A";
-
-            changed = true;
-        }
-
-        if (!"NOT_FOUND".equalsIgnoreCase(
-                share.yahooStatus
-        )) {
-
-            share.yahooStatus =
-                    "NOT_FOUND";
-
-            changed = true;
-        }
-
-        System.out.println(
-                "Yahoo price NOT_FOUND for: "
-                        + share.symbol
-        );
-
-        return changed;
-    }
-
-    // ============================================================
-    // PARSE YAHOO CHART RESPONSE
-    // ============================================================
-
-    private YahooPriceData extractYahooChartPrice(
-            String response
-    ) {
-
-        if (isEmpty(response)) {
-
-            return null;
-        }
-
-        try {
-
-            JsonObject root =
-                    JsonParser.parseString(
-                            response
-                    ).getAsJsonObject();
-
-            if (!root.has("chart")
-                    || root.get("chart").isJsonNull()) {
-
-                return null;
-            }
-
-            JsonObject chart =
-                    root.getAsJsonObject(
-                            "chart"
-                    );
-
-            if (!chart.has("result")
-                    || chart.get("result").isJsonNull()) {
-
-                return null;
-            }
-
-            JsonArray results =
-                    chart.getAsJsonArray(
-                            "result"
-                    );
-
-            if (results == null
-                    || results.isEmpty()
-                    || results.get(0).isJsonNull()) {
-
-                return null;
-            }
-
-            JsonObject firstResult =
-                    results
-                            .get(0)
-                            .getAsJsonObject();
-
-            if (!firstResult.has("meta")
-                    || firstResult.get("meta").isJsonNull()) {
-
-                return null;
-            }
-
-            JsonObject meta =
-                    firstResult.getAsJsonObject(
-                            "meta"
-                    );
-
-            YahooPriceData price =
-                    new YahooPriceData();
-
-            price.currentSharePrice =
-                    getFormattedNumber(
-                            meta,
-                            "regularMarketPrice"
-                    );
-
-            price.chartPreviousClose =
-                    getFormattedNumber(
-                            meta,
-                            "chartPreviousClose"
-                    );
-
-            if ("N/A".equalsIgnoreCase(
-                    price.chartPreviousClose
-            )) {
-
-                price.chartPreviousClose =
-                        getFormattedNumber(
-                                meta,
-                                "previousClose"
-                        );
-            }
-
-            if ("N/A".equalsIgnoreCase(
-                    price.currentSharePrice
-            )) {
-
-                return null;
-            }
-
-            return price;
-
-        } catch (Exception e) {
-
-            System.out.println(
-                    "Yahoo chart parsing failed: "
-                            + e.getMessage()
-            );
-
-            return null;
-        }
-    }
-
-    // ============================================================
     // FORMAT YAHOO NUMBER
     // ============================================================
 
@@ -4386,14 +3456,75 @@ public class DividendService {
     }
 
     // ============================================================
-    // YAHOO PRICE DATA
+    // YAHOO QUOTE
     // ============================================================
 
-    private static class YahooPriceData {
+    private static class YahooQuote {
 
-        private String currentSharePrice;
+        private String price;
 
-        private String chartPreviousClose;
+        private String previousClose;
+
+        /*
+         * Last trade time reported by Yahoo (IST).
+         */
+        private String marketTime;
+    }
+
+    private static class QuoteResult {
+
+        private final Map<String, YahooQuote> quotes =
+                new HashMap<>();
+
+        /*
+         * Symbols Yahoo answered for (with or without a price).
+         * Symbols in a failed request are NOT included, so a
+         * network error never marks a share NOT_FOUND.
+         */
+        private final Set<String> answeredSymbols =
+                new HashSet<>();
+
+        private int requestCount = 0;
+    }
+
+    // ============================================================
+    // SNAPSHOT (immutable view served to users)
+    // ============================================================
+
+    private static final class Snapshot {
+
+        private static final Snapshot EMPTY =
+                new Snapshot(
+                        Collections.<DividendData>emptyList(),
+                        1,
+                        null,
+                        null,
+                        false
+                );
+
+        private final List<DividendData> shares;
+
+        private final long version;
+
+        private final String pricesAsOf;
+
+        private final String lastDividendApiRefresh;
+
+        private final boolean dividendsLoaded;
+
+        private Snapshot(
+                List<DividendData> shares,
+                long version,
+                String pricesAsOf,
+                String lastDividendApiRefresh,
+                boolean dividendsLoaded
+        ) {
+            this.shares = shares;
+            this.version = version;
+            this.pricesAsOf = pricesAsOf;
+            this.lastDividendApiRefresh = lastDividendApiRefresh;
+            this.dividendsLoaded = dividendsLoaded;
+        }
     }
 
     // ============================================================
@@ -4419,19 +3550,47 @@ public class DividendService {
         private String source;
 
         /*
-         * Yahoo price lookup status.
-         *
-         * null / empty
-         * NOT_FOUND
+         * Yahoo price lookup status: null or NOT_FOUND.
          */
         private String yahooStatus;
 
         /*
-         * Last time Yahoo was contacted for this symbol.
-         *
-         * This is used for the 1-minute price refresh limit.
+         * Last time Yahoo was contacted for this symbol (IST).
          */
         private String lastYahooAttempt;
+
+        /*
+         * Time the current price was fetched (IST).
+         * A price fetched after the last settled close
+         * (15:35) is the final closing price.
+         */
+        private String priceAsOf;
+
+        /*
+         * Last trade time reported by Yahoo (IST).
+         */
+        private String marketTime;
+
+        private DividendData copy() {
+
+            DividendData copy =
+                    new DividendData();
+
+            copy.shareName = shareName;
+            copy.symbol = symbol;
+            copy.exDate = exDate;
+            copy.dividendDetails = dividendDetails;
+            copy.dividendAmount = dividendAmount;
+            copy.currentSharePrice = currentSharePrice;
+            copy.chartPreviousClose = chartPreviousClose;
+            copy.source = source;
+            copy.yahooStatus = yahooStatus;
+            copy.lastYahooAttempt = lastYahooAttempt;
+            copy.priceAsOf = priceAsOf;
+            copy.marketTime = marketTime;
+
+            return copy;
+        }
     }
 
     // ============================================================
@@ -4441,30 +3600,32 @@ public class DividendService {
     private static class CacheFile {
 
         /*
-         * ========================================================
-         * CACHE VERSION
-         * ========================================================
-         *
-         * This represents the version of the actual data that
-         * the frontend consumes.
-         *
-         * It changes ONLY when frontend-visible data changes.
+         * Version of the data the frontend sees. Changes ONLY
+         * when frontend-visible data changes.
          */
         private long version = 1;
 
         /*
-         * Last time the JSON file itself was saved.
-         *
-         * This is metadata only and does NOT affect version.
+         * Last time the cache changed (metadata).
          */
         private String lastUpdated;
 
         /*
-         * Last time NSE + Groww dividend APIs were checked.
-         *
-         * This is metadata only and does NOT affect version.
+         * Last successful NSE + Groww check.
          */
         private String lastDividendApiRefresh;
+
+        /*
+         * Last successful Yahoo price update.
+         */
+        private String lastPriceRefresh;
+
+        /*
+         * Weekday market holidays detected automatically
+         * (yyyy-MM-dd), last 30 days only.
+         */
+        private List<String> holidays =
+                new ArrayList<>();
 
         /*
          * Cached dividend records.

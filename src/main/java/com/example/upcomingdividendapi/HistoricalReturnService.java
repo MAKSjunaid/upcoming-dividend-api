@@ -28,7 +28,7 @@ import java.util.concurrent.Executors;
  *
  * Responsibilities:
  *
- * 1. Get REAL share symbols from DividendService..
+ * 1. Get REAL share symbols from DividendService.
  *
  * 2. Do NOT use MockData.
  *
@@ -149,6 +149,40 @@ public class HistoricalReturnService {
             );
 
 
+    /*
+     * When each symbol's history was fetched (IST).
+     *
+     * Fix: previously cached history never expired, so 1D/5D
+     * returns stayed stale for as long as the server ran.
+     */
+    private final Map<String, java.time.LocalDateTime> fetchedAt =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final int LIVE_HISTORY_REFRESH_MINUTES = 15;
+
+    private boolean isFresh(String yahooSymbol) {
+
+        java.time.LocalDateTime fetched =
+                fetchedAt.get(yahooSymbol);
+
+        if (fetched == null) {
+            return false;
+        }
+
+        java.time.LocalDateTime now =
+                MarketClock.now();
+
+        if (MarketClock.isMarketOpen(now, MarketClock.noHolidays())) {
+            return now.isBefore(
+                    fetched.plusMinutes(LIVE_HISTORY_REFRESH_MINUTES)
+            );
+        }
+
+        return !fetched.isBefore(
+                MarketClock.lastSettledClose(now, MarketClock.noHolidays())
+        );
+    }
+
     // ============================================================
     // SPRING INJECTION
     // ============================================================
@@ -197,7 +231,13 @@ public class HistoricalReturnService {
                 cache.get(yahooSymbol);
 
 
-        if (cached != null) {
+        /*
+         * Cached history is reused only while it is still
+         * current (see isFresh): live during market hours for
+         * 15 minutes, otherwise until the next market close.
+         */
+        if (cached != null
+                && isFresh(yahooSymbol)) {
 
             return cached;
         }
@@ -217,6 +257,11 @@ public class HistoricalReturnService {
             cache.put(
                     response.getSymbol(),
                     response
+            );
+
+            fetchedAt.put(
+                    response.getSymbol(),
+                    MarketClock.now()
             );
         }
 
@@ -530,6 +575,13 @@ public class HistoricalReturnService {
                     && !results.isEmpty()) {
 
                 cache.putAll(results);
+
+                java.time.LocalDateTime fetchedNow =
+                        MarketClock.now();
+
+                for (String key : results.keySet()) {
+                    fetchedAt.put(key, fetchedNow);
+                }
             }
 
 
