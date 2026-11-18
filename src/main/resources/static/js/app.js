@@ -1359,6 +1359,11 @@ let lastVersionCheckAt = 0;
 
 let pendingForcedRefresh = false;
 
+/*
+ * Newest data version the server has told us about.
+ */
+let latestServerVersion = null;
+
 
 function readResponseMeta(response) {
 
@@ -1517,6 +1522,66 @@ async function refreshWindowCache() {
 
 
 /*
+ * ONE request for a range. If the range is inside the
+ * 90-day window, download the window once (it also powers
+ * instant Search) and pick the range out of it locally.
+ */
+async function fetchForRange(range) {
+
+    const serverWindow =
+        getServerWindow();
+
+
+    if (
+        range.from >= serverWindow.from &&
+        range.to <= serverWindow.to
+    ) {
+
+        const windowData =
+            await fetchDividendData(
+                serverWindow.from,
+                serverWindow.to
+            );
+
+
+        const version =
+            metaVersion(windowData);
+
+
+        windowCache = {
+            from: serverWindow.from,
+            to: serverWindow.to,
+            version: version,
+            data: windowData
+        };
+
+
+        const rangeData =
+            filterByRange(
+                windowData,
+                range.from,
+                range.to
+            );
+
+
+        responseMeta.set(
+            rangeData,
+            responseMeta.get(windowData)
+        );
+
+
+        return rangeData;
+    }
+
+
+    return fetchDividendData(
+        range.from,
+        range.to
+    );
+}
+
+
+/*
  * Returns data for the range without any network request
  * when the page already holds it, otherwise null.
  */
@@ -1602,10 +1667,18 @@ function startLiveStream() {
 
             if (
                 status.version !== undefined &&
-                status.version !== null &&
-                String(status.version) !== currentDataVersion
+                status.version !== null
             ) {
-                autoRefreshDividends(true);
+
+                latestServerVersion =
+                    String(status.version);
+
+
+                if (
+                    latestServerVersion !== currentDataVersion
+                ) {
+                    autoRefreshDividends(true);
+                }
             }
         }
     );
@@ -1632,7 +1705,11 @@ document.addEventListener(
             startLiveStream();
         }
 
-        autoRefreshDividends(true);
+        /*
+         * Only the tiny version check; data is downloaded
+         * only if something changed while the tab was hidden.
+         */
+        autoRefreshDividends(false, true);
     }
 );
 
@@ -1669,6 +1746,16 @@ async function getBackendVersion() {
 
     lastVersionCheckAt =
         Date.now();
+
+
+    if (
+        versionData &&
+        versionData.version !== undefined &&
+        versionData.version !== null
+    ) {
+        latestServerVersion =
+            String(versionData.version);
+    }
 
 
     if (
@@ -1955,10 +2042,7 @@ async function initialLoadDividends() {
     try {
 
         const data =
-            await fetchDividendData(
-                dates.from,
-                dates.to
-            );
+            await fetchForRange(dates);
 
 
         if (
@@ -2010,12 +2094,6 @@ async function initialLoadDividends() {
 
 
             hideInitialWaitingState();
-
-
-            /*
-             * Prepare instant Search in the background.
-             */
-            refreshWindowCache();
 
 
             return;
@@ -2234,10 +2312,7 @@ async function searchDividends(forceNetwork) {
          * response headers (previously 3-5 sequential calls).
          */
         const data =
-            await fetchDividendData(
-                dates.from,
-                dates.to
-            );
+            await fetchForRange(dates);
 
 
         applySearchResult(
@@ -2247,13 +2322,6 @@ async function searchDividends(forceNetwork) {
             metaVersion(data)
         );
 
-
-        if (
-            !windowCache ||
-            windowCache.version !== currentDataVersion
-        ) {
-            refreshWindowCache();
-        }
 
     } catch (e) {
 
@@ -2377,10 +2445,14 @@ function applySearchResult(
    VERSION-CHECK AUTOMATIC REFRESH
    ========================================================= */
 
-async function autoRefreshDividends(force) {
+async function autoRefreshDividends(force, checkNow) {
 
     force =
         force === true;
+
+
+    checkNow =
+        checkNow === true;
 
 
     /*
@@ -2414,6 +2486,7 @@ async function autoRefreshDividends(force) {
      */
     if (
         !force &&
+        !checkNow &&
         liveStreamConnected &&
         Date.now() - lastVersionCheckAt <
         STREAM_FALLBACK_POLL_MS
@@ -2450,10 +2523,7 @@ async function autoRefreshDividends(force) {
         ) {
 
             const initialData =
-                await fetchDividendData(
-                    range.from,
-                    range.to
-                );
+                await fetchForRange(range);
 
 
             if (
@@ -2494,9 +2564,6 @@ async function autoRefreshDividends(force) {
 
                 hideInitialWaitingState();
 
-
-                refreshWindowCache();
-
             } else {
 
                 showInitialWaitingState();
@@ -2522,10 +2589,7 @@ async function autoRefreshDividends(force) {
 
 
         const data =
-            await fetchDividendData(
-                range.from,
-                range.to
-            );
+            await fetchForRange(range);
 
 
         if (
@@ -2571,9 +2635,6 @@ async function autoRefreshDividends(force) {
             openStockPerformanceState
         );
 
-
-        refreshWindowCache();
-
     } catch (e) {
 
         console.warn(
@@ -2585,6 +2646,20 @@ async function autoRefreshDividends(force) {
 
         autoRefreshing =
             false;
+
+
+        /*
+         * Re-run only if the server announced a version newer
+         * than the one we just loaded.
+         */
+        if (
+            pendingForcedRefresh &&
+            latestServerVersion !== null &&
+            latestServerVersion === currentDataVersion
+        ) {
+            pendingForcedRefresh =
+                false;
+        }
 
 
         if (pendingForcedRefresh) {
