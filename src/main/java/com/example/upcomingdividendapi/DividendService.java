@@ -439,7 +439,9 @@ public class DividendService {
         );
 
         scheduler.scheduleWithFixedDelay(
-                liveUpdates::heartbeat,
+                () -> liveUpdates.heartbeat(
+                        String.valueOf(snapshot.version)
+                ),
                 25,
                 25,
                 TimeUnit.SECONDS
