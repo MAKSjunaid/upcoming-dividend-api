@@ -3898,6 +3898,39 @@ document.addEventListener(
 );
 
 
+/*
+ * Pull-to-refresh: ask only for the tiny version number.
+ * Download the data only if something changed on the
+ * server (or the check fails).
+ */
+async function pullRefreshCheck() {
+
+    try {
+
+        const backendVersion =
+            await getBackendVersion();
+
+
+        if (
+            initialDataReady &&
+            backendVersion === currentDataVersion
+        ) {
+            return;
+        }
+
+    } catch (e) {
+
+        console.warn(
+            "Version check failed during pull-to-refresh:",
+            e
+        );
+    }
+
+
+    await searchDividends(true);
+}
+
+
 async function refreshDividends() {
 
     if (refreshing) {
@@ -3924,7 +3957,7 @@ async function refreshDividends() {
 
     try {
 
-        await searchDividends(true);
+        await pullRefreshCheck();
 
     } finally {
 
