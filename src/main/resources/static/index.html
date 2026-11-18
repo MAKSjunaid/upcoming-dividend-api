@@ -15,11 +15,40 @@
             name="viewport"
             content="width=device-width, initial-scale=1.0">
 
+    <!-- Install as an app (Android / iPhone "Add to Home Screen") -->
+    <link
+            rel="manifest"
+            href="/manifest.json">
+
+    <meta
+            name="theme-color"
+            content="#f5f7fb">
+
+    <link
+            rel="apple-touch-icon"
+            href="/icons/apple-touch-icon.png">
+
+    <meta
+            name="apple-mobile-web-app-capable"
+            content="yes">
+
+    <meta
+            name="mobile-web-app-capable"
+            content="yes">
+
+    <meta
+            name="apple-mobile-web-app-status-bar-style"
+            content="default">
+
+    <meta
+            name="apple-mobile-web-app-title"
+            content="Dividends">
+
     <title>Dividend Finder</title>
 
     <link
             rel="stylesheet"
-            href="css/style.css?v=6">
+            href="css/style.css?v=7">
 
 </head>
 
@@ -415,7 +444,7 @@
      dividend-ui.js contains the existing stock-card
      rendering and pagination logic.
 -->
-<script src="/js/dividend-ui.js?v=6"></script>
+<script src="/js/dividend-ui.js?v=7"></script>
 
 
 <!--
@@ -428,7 +457,7 @@
      - pull-to-refresh
      - automatic refresh
 -->
-<script src="/js/app.js?v=6"></script>
+<script src="/js/app.js?v=7"></script>
 
 
 <!--
@@ -438,8 +467,21 @@
      It is intentionally kept separate from app.js
      and dividend-ui.js.
 -->
-<script src="/js/stock-details.js?v=6"></script>
+<script src="/js/stock-details.js?v=7"></script>
 
+
+<script>
+    /* Installable app: register the service worker. */
+    if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function() {
+            navigator.serviceWorker
+                .register("/sw.js")
+                .catch(function(e) {
+                    console.warn("Service worker not registered:", e);
+                });
+        });
+    }
+</script>
 
 </body>
 
