@@ -2675,3 +2675,15 @@ body {
 
 /* GOOD FOR NOW */
 
+
+
+/* =========================================================
+   Disable the browser's own pull-to-refresh (it reloads the
+   whole page). The app's pull-to-refresh handles it instead.
+   ========================================================= */
+
+html,
+body {
+
+    overscroll-behavior-y: contain;
+}
