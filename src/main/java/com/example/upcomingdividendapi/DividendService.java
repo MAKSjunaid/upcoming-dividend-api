@@ -113,6 +113,23 @@ public class DividendService {
     private static final int ACTIVE_PRICE_WINDOW_DAYS = 30;
 
     /*
+     * Dividends kept ready in memory: today .. tomorrow + 90
+     * days. Any Search inside this window is answered
+     * instantly (no NSE / Groww call while the user waits).
+     */
+    private static final int CACHE_WINDOW_DAYS = 90;
+
+    /*
+     * Shares whose ex-date is more than 31 days away get live
+     * prices every 5 minutes (instead of 30 seconds) to keep
+     * Yahoo load low. After close they still get the final
+     * closing price once.
+     */
+    private static final int NEAR_TERM_DAYS = 31;
+
+    private static final int FAR_PRICE_REFRESH_SECONDS = 300;
+
+    /*
      * While the market is open, prices older than this are
      * refreshed.
      */
@@ -874,13 +891,13 @@ public class DividendService {
 
             /*
              * Same window as isInsideActiveWindow:
-             * today .. tomorrow + 30 days.
+             * today .. tomorrow + 90 days.
              */
             LocalDate fromDate =
                     today();
 
             LocalDate toDate =
-                    today().plusDays(1 + ACTIVE_PRICE_WINDOW_DAYS);
+                    today().plusDays(1 + CACHE_WINDOW_DAYS);
 
             List<DividendData> fresh =
                     fetchDividendDataFromApis(
@@ -1019,8 +1036,23 @@ public class DividendService {
                 holidays;
 
         if (MarketClock.isMarketOpen(now, currentHolidays)) {
+
+            LocalDate exDate =
+                    parseCachedExDate(share.exDate);
+
+            boolean farAway =
+                    exDate != null
+                            && exDate.isAfter(
+                            now.toLocalDate().plusDays(NEAR_TERM_DAYS)
+                    );
+
+            int refreshSeconds =
+                    farAway
+                            ? FAR_PRICE_REFRESH_SECONDS
+                            : LIVE_PRICE_REFRESH_SECONDS;
+
             return !now.isBefore(
-                    asOf.plusSeconds(LIVE_PRICE_REFRESH_SECONDS)
+                    asOf.plusSeconds(refreshSeconds)
             );
         }
 
@@ -2040,7 +2072,7 @@ public class DividendService {
     ) {
 
         /*
-         * FIX: the cached window is today .. tomorrow + 30 days.
+         * FIX: the cached window is today .. tomorrow + 90 days.
          *
          * Previously it ended at today + 30, one day short of
          * the default request (tomorrow .. tomorrow + 30), so
@@ -2052,7 +2084,7 @@ public class DividendService {
 
         LocalDate activeEnd =
                 today.plusDays(
-                        1 + ACTIVE_PRICE_WINDOW_DAYS
+                        1 + CACHE_WINDOW_DAYS
                 );
 
         return !fromDate.isBefore(activeStart)
