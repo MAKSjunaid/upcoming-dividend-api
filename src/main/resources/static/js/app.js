@@ -1002,7 +1002,9 @@ investmentAmount.addEventListener(
 
 searchButton.addEventListener(
     "click",
-    searchDividends
+    function() {
+        searchDividends(false);
+    }
 );
 
 
@@ -1298,6 +1300,18 @@ async function fetchDividendData(
         await response.json();
 
 
+    if (Array.isArray(data)) {
+
+        const meta =
+            readResponseMeta(response);
+
+        responseMeta.set(
+            data,
+            meta
+        );
+    }
+
+
     if (!Array.isArray(data)) {
 
         throw new Error(
@@ -1308,6 +1322,320 @@ async function fetchDividendData(
 
     return data;
 }
+
+/* =========================================================
+   LIVE DATA HELPERS
+   =========================================================
+
+   - The server pushes a "status" event (Server-Sent Events)
+     the moment prices or dividends change, so the page
+     updates instantly instead of polling every 5 seconds.
+
+   - While the live connection is open, the 5-second timer
+     only does a safety check once a minute.
+
+   - The page keeps the server's full 31-day window in
+     memory, so Search inside that window is instant
+     (no network request at all).
+   ========================================================= */
+
+const STREAM_FALLBACK_POLL_MS =
+    60 * 1000;
+
+const responseMeta =
+    new WeakMap();
+
+let loadedRange = null;
+
+let windowCache = null;
+
+let windowCacheLoading = false;
+
+let liveStream = null;
+
+let liveStreamConnected = false;
+
+let lastVersionCheckAt = 0;
+
+let pendingForcedRefresh = false;
+
+
+function readResponseMeta(response) {
+
+    const headers =
+        response.headers;
+
+    const version =
+        headers.get("X-Data-Version");
+
+    if (!version) {
+        return null;
+    }
+
+    return {
+        version: version,
+        priceStatus: headers.get("X-Price-Status"),
+        pricesAsOf: headers.get("X-Prices-As-Of"),
+        marketOpen: headers.get("X-Market-Open") === "true",
+        lastCloseDate: headers.get("X-Last-Close-Date")
+    };
+}
+
+
+function metaVersion(data) {
+
+    const meta =
+        data
+            ? responseMeta.get(data)
+            : null;
+
+    if (
+        meta &&
+        meta.version !== null &&
+        meta.version !== undefined
+    ) {
+        return String(meta.version);
+    }
+
+    return currentDataVersion;
+}
+
+
+function inputValueToTime(value) {
+
+    if (!value) {
+        return null;
+    }
+
+    const parts =
+        String(value).split("-");
+
+    if (parts.length !== 3) {
+        return null;
+    }
+
+    const date =
+        new Date(
+            Number(parts[0]),
+            Number(parts[1]) - 1,
+            Number(parts[2])
+        );
+
+    return isNaN(date.getTime())
+        ? null
+        : date.getTime();
+}
+
+
+/*
+ * Same window the server keeps in memory:
+ * today .. tomorrow + 30 days.
+ */
+function getServerWindow() {
+
+    const start =
+        new Date();
+
+    const end =
+        new Date();
+
+    end.setDate(
+        end.getDate() + 31
+    );
+
+    return {
+        from: dateToInputValue(start),
+        to: dateToInputValue(end)
+    };
+}
+
+
+function filterByRange(
+    data,
+    from,
+    to
+) {
+    const fromTime =
+        inputValueToTime(from);
+
+    const toTime =
+        inputValueToTime(to);
+
+    return data.filter(
+        function(stock) {
+
+            const exTime =
+                getExDividendTime(
+                    stock.ex_dividend_date
+                );
+
+            return exTime !== null &&
+                exTime >= fromTime &&
+                exTime <= toTime;
+        }
+    );
+}
+
+
+async function refreshWindowCache() {
+
+    if (windowCacheLoading) {
+        return;
+    }
+
+    windowCacheLoading = true;
+
+    try {
+        const range =
+            getServerWindow();
+
+        const data =
+            await fetchDividendData(
+                range.from,
+                range.to
+            );
+
+        windowCache = {
+            from: range.from,
+            to: range.to,
+            version: metaVersion(data),
+            data: data
+        };
+
+    } catch (e) {
+
+        console.warn(
+            "Unable to prepare instant search data:",
+            e
+        );
+
+    } finally {
+
+        windowCacheLoading = false;
+    }
+}
+
+
+/*
+ * Returns data for the range without any network request
+ * when the page already holds it, otherwise null.
+ */
+function getInstantData(range) {
+
+    if (
+        initialDataReady &&
+        loadedRange &&
+        loadedRange.from === range.from &&
+        loadedRange.to === range.to &&
+        Array.isArray(dividendData) &&
+        dividendData.length > 0
+    ) {
+        return dividendData.slice();
+    }
+
+    if (
+        windowCache &&
+        currentDataVersion !== null &&
+        windowCache.version === currentDataVersion &&
+        range.from >= windowCache.from &&
+        range.to <= windowCache.to
+    ) {
+        return filterByRange(
+            windowCache.data,
+            range.from,
+            range.to
+        );
+    }
+
+    return null;
+}
+
+
+/* =========================================================
+   LIVE STREAM (Server-Sent Events)
+   ========================================================= */
+
+function startLiveStream() {
+
+    if (
+        !window.EventSource ||
+        (
+            liveStream &&
+            liveStream.readyState !== 2
+        )
+    ) {
+        return;
+    }
+
+    liveStream =
+        new EventSource(
+            "/api/dividends/stream"
+        );
+
+    liveStream.onopen =
+        function() {
+            liveStreamConnected = true;
+        };
+
+    liveStream.onerror =
+        function() {
+            liveStreamConnected = false;
+        };
+
+    liveStream.addEventListener(
+        "status",
+        function(event) {
+
+            liveStreamConnected = true;
+
+            lastVersionCheckAt =
+                Date.now();
+
+            let status;
+
+            try {
+                status =
+                    JSON.parse(event.data);
+            } catch (e) {
+                return;
+            }
+
+            if (
+                status.version !== undefined &&
+                status.version !== null &&
+                String(status.version) !== currentDataVersion
+            ) {
+                autoRefreshDividends(true);
+            }
+        }
+    );
+}
+
+
+/*
+ * Phones close background connections: reconnect when the
+ * page becomes visible again and check for changes.
+ */
+document.addEventListener(
+    "visibilitychange",
+    function() {
+
+        if (document.visibilityState !== "visible") {
+            return;
+        }
+
+        if (
+            !liveStream ||
+            liveStream.readyState === 2
+        ) {
+            liveStreamConnected = false;
+            startLiveStream();
+        }
+
+        autoRefreshDividends(true);
+    }
+);
+
 
 
 /* =========================================================
@@ -1337,6 +1665,10 @@ async function getBackendVersion() {
 
     const versionData =
         await response.json();
+
+
+    lastVersionCheckAt =
+        Date.now();
 
 
     if (
@@ -1532,6 +1864,10 @@ function restoreStockPerformanceAfterRefresh(
 
 async function initialLoadDividends() {
 
+    /*
+     * Show the last known data instantly, then replace it
+     * with fresh data (one request).
+     */
     const hasPreviousData =
         restorePreviousDividendData();
 
@@ -1560,6 +1896,9 @@ async function initialLoadDividends() {
 
         initialLoad =
             false;
+
+
+        startLiveStream();
 
 
         return;
@@ -1615,24 +1954,6 @@ async function initialLoadDividends() {
 
     try {
 
-        let versionBefore =
-            null;
-
-
-        try {
-
-            versionBefore =
-                await getBackendVersion();
-
-        } catch (versionError) {
-
-            console.warn(
-                "Unable to get backend version during initial load:",
-                versionError
-            );
-        }
-
-
         const data =
             await fetchDividendData(
                 dates.from,
@@ -1649,41 +1970,33 @@ async function initialLoadDividends() {
                 data;
 
 
+            loadedRange = {
+                from: dates.from,
+                to: dates.to
+            };
+
+
             initialDataReady =
                 true;
 
 
-            let versionAfter =
-                versionBefore;
-
-
-            try {
-
-                versionAfter =
-                    await getBackendVersion();
-
-            } catch (versionError) {
-
-                console.warn(
-                    "Unable to get backend version after initial load:",
-                    versionError
-                );
-            }
+            const version =
+                metaVersion(data);
 
 
             saveLastSuccessfulDividendData(
                 data,
-                versionAfter
+                version
             );
 
 
             if (
-                versionAfter !== null &&
-                versionAfter !== undefined
+                version !== null &&
+                version !== undefined
             ) {
 
                 currentDataVersion =
-                    String(versionAfter);
+                    String(version);
             }
 
 
@@ -1697,6 +2010,12 @@ async function initialLoadDividends() {
 
 
             hideInitialWaitingState();
+
+
+            /*
+             * Prepare instant Search in the background.
+             */
+            refreshWindowCache();
 
 
             return;
@@ -1799,6 +2118,9 @@ async function initialLoadDividends() {
 
         initialLoad =
             false;
+
+
+        startLiveStream();
     }
 }
 
@@ -1807,7 +2129,7 @@ async function initialLoadDividends() {
    SEARCH
    ========================================================= */
 
-async function searchDividends() {
+async function searchDividends(forceNetwork) {
 
     clearMessages();
 
@@ -1828,6 +2150,7 @@ async function searchDividends() {
         showError(
             e.message
         );
+
 
         return;
     }
@@ -1855,7 +2178,36 @@ async function searchDividends() {
             "Please enter a valid investment amount."
         );
 
+
         return;
+    }
+
+
+    /*
+     * INSTANT: the page already holds this range (same range,
+     * only the investment changed, or inside the 31-day
+     * window). No network request, no loading screen.
+     *
+     * Pull-to-refresh passes forceNetwork = true.
+     */
+    if (forceNetwork !== true) {
+
+        const instantData =
+            getInstantData(dates);
+
+
+        if (instantData) {
+
+            applySearchResult(
+                dates,
+                investment,
+                instantData,
+                currentDataVersion
+            );
+
+
+            return;
+        }
     }
 
 
@@ -1877,24 +2229,10 @@ async function searchDividends() {
 
     try {
 
-        let versionBeforeSearch =
-            null;
-
-
-        try {
-
-            versionBeforeSearch =
-                await getBackendVersion();
-
-        } catch (versionError) {
-
-            console.warn(
-                "Unable to get version before search:",
-                versionError
-            );
-        }
-
-
+        /*
+         * ONE request. The data version comes back in the
+         * response headers (previously 3-5 sequential calls).
+         */
         const data =
             await fetchDividendData(
                 dates.from,
@@ -1902,146 +2240,20 @@ async function searchDividends() {
             );
 
 
-        let versionAfterSearch =
-            null;
-
-
-        try {
-
-            versionAfterSearch =
-                await getBackendVersion();
-
-        } catch (versionError) {
-
-            console.warn(
-                "Unable to get version after search:",
-                versionError
-            );
-        }
-
-
-        let finalData =
-            data;
-
-
-        if (
-            versionBeforeSearch !== null &&
-            versionAfterSearch !== null &&
-            versionBeforeSearch !==
-                versionAfterSearch
-        ) {
-
-            console.log(
-                "Dividend data changed during search. Fetching latest data..."
-            );
-
-
-            const latestData =
-                await fetchDividendData(
-                    dates.from,
-                    dates.to
-                );
-
-
-            if (
-                Array.isArray(latestData)
-            ) {
-
-                finalData =
-                    latestData;
-            }
-
-
-            try {
-
-                versionAfterSearch =
-                    await getBackendVersion();
-
-            } catch (versionError) {
-
-                console.warn(
-                    "Unable to get final dividend version:",
-                    versionError
-                );
-            }
-        }
-
-
-        fromDate.value =
-            dates.from;
-
-
-        toDate.value =
-            dates.to;
-
-
-        updateDateDisplays();
-
-
-        updateSummary(
+        applySearchResult(
+            dates,
             investment,
-            dates
+            data,
+            metaVersion(data)
         );
 
 
-        dividendData =
-            finalData;
-
-
-        currentInvestment =
-            investment;
-
-
-        currentSort =
-            "dividendDesc";
-
-
-        sortFilter.value =
-            "dividendDesc";
-
-
-        currentPage = 1;
-
-
-        sortStocks();
-
-
         if (
-            Array.isArray(finalData) &&
-            finalData.length > 0
+            !windowCache ||
+            windowCache.version !== currentDataVersion
         ) {
-
-            saveLastSuccessfulDividendData(
-                finalData,
-                versionAfterSearch
-            );
+            refreshWindowCache();
         }
-
-
-        clearFilterError();
-
-
-        closeSearchPanel();
-
-
-        window.scrollTo({
-            top: 0,
-            behavior: "smooth"
-        });
-
-
-        if (
-            versionAfterSearch !== null
-        ) {
-
-            currentDataVersion =
-                versionAfterSearch;
-        }
-
-
-        initialDataReady =
-            true;
-
 
     } catch (e) {
 
@@ -2070,18 +2282,117 @@ async function searchDividends() {
 }
 
 
+function applySearchResult(
+    dates,
+    investment,
+    finalData,
+    version
+) {
+
+    fromDate.value =
+        dates.from;
+
+
+    toDate.value =
+        dates.to;
+
+
+    updateDateDisplays();
+
+
+    updateSummary(
+        investment,
+        dates
+    );
+
+
+    dividendData =
+        finalData;
+
+
+    loadedRange = {
+        from: dates.from,
+        to: dates.to
+    };
+
+
+    currentInvestment =
+        investment;
+
+
+    currentSort =
+        "dividendDesc";
+
+
+    sortFilter.value =
+        "dividendDesc";
+
+
+    currentPage = 1;
+
+
+    sortStocks();
+
+
+    if (
+        Array.isArray(finalData) &&
+        finalData.length > 0
+    ) {
+
+        saveLastSuccessfulDividendData(
+            finalData,
+            version
+        );
+    }
+
+
+    clearFilterError();
+
+
+    closeSearchPanel();
+
+
+    window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+    });
+
+
+    if (
+        version !== null &&
+        version !== undefined
+    ) {
+
+        currentDataVersion =
+            String(version);
+    }
+
+
+    initialDataReady =
+        true;
+}
+
+
 /* =========================================================
    VERSION-CHECK AUTOMATIC REFRESH
    ========================================================= */
 
-async function autoRefreshDividends() {
+async function autoRefreshDividends(force) {
 
-    if (autoRefreshing) {
+    force =
+        force === true;
+
+
+    /*
+     * The first page load is still fetching: nothing to do.
+     */
+    if (initialLoad) {
         return;
     }
 
 
     if (
+        autoRefreshing ||
         refreshing ||
         (
             searchButton &&
@@ -2089,15 +2400,41 @@ async function autoRefreshDividends() {
         )
     ) {
 
+        if (force) {
+            pendingForcedRefresh = true;
+        }
+
         return;
     }
 
 
+    /*
+     * Live connection open: the server pushes changes, so the
+     * timer only does a safety check once a minute.
+     */
     if (
-        !fromDate.value ||
-        !toDate.value
+        !force &&
+        liveStreamConnected &&
+        Date.now() - lastVersionCheckAt <
+        STREAM_FALLBACK_POLL_MS
     ) {
+        return;
+    }
 
+
+    const range =
+        loadedRange ||
+        (
+            fromDate.value && toDate.value
+                ? {
+                    from: fromDate.value,
+                    to: toDate.value
+                }
+                : null
+        );
+
+
+    if (!range) {
         return;
     }
 
@@ -2112,28 +2449,10 @@ async function autoRefreshDividends() {
             !initialDataReady
         ) {
 
-            let backendVersion =
-                null;
-
-
-            try {
-
-                backendVersion =
-                    await getBackendVersion();
-
-            } catch (versionError) {
-
-                console.warn(
-                    "Unable to get version while preparing initial data:",
-                    versionError
-                );
-            }
-
-
             const initialData =
                 await fetchDividendData(
-                    fromDate.value,
-                    toDate.value
+                    range.from,
+                    range.to
                 );
 
 
@@ -2146,32 +2465,16 @@ async function autoRefreshDividends() {
                     initialData;
 
 
+                loadedRange =
+                    range;
+
+
                 initialDataReady =
                     true;
 
 
-                if (
-                    backendVersion !== null
-                ) {
-
-                    currentDataVersion =
-                        backendVersion;
-
-                } else {
-
-                    try {
-
-                        currentDataVersion =
-                            await getBackendVersion();
-
-                    } catch (versionError) {
-
-                        console.warn(
-                            "Unable to confirm initial dividend version:",
-                            versionError
-                        );
-                    }
-                }
+                currentDataVersion =
+                    metaVersion(initialData);
 
 
                 saveLastSuccessfulDividendData(
@@ -2182,13 +2485,7 @@ async function autoRefreshDividends() {
 
                 updateSummary(
                     currentInvestment,
-                    {
-                        from:
-                            fromDate.value,
-
-                        to:
-                            toDate.value
-                    }
+                    range
                 );
 
 
@@ -2196,6 +2493,9 @@ async function autoRefreshDividends() {
 
 
                 hideInitialWaitingState();
+
+
+                refreshWindowCache();
 
             } else {
 
@@ -2207,41 +2507,26 @@ async function autoRefreshDividends() {
         }
 
 
-        /* =================================================
-           GET CURRENT BACKEND VERSION
-           ================================================= */
+        if (!force) {
 
-        const backendVersion =
-            await getBackendVersion();
+            const backendVersion =
+                await getBackendVersion();
 
 
-        /* =================================================
-           SAME VERSION
-           ================================================= */
-
-        if (
-            currentDataVersion ===
-            backendVersion
-        ) {
-
-            return;
+            if (
+                currentDataVersion === backendVersion
+            ) {
+                return;
+            }
         }
 
 
-        /* =================================================
-           VERSION CHANGED
-           ================================================= */
-
         const data =
             await fetchDividendData(
-                fromDate.value,
-                toDate.value
+                range.from,
+                range.to
             );
 
-
-        /* =================================================
-           CHANGED + []
-           ================================================= */
 
         if (
             !Array.isArray(data) ||
@@ -2249,7 +2534,7 @@ async function autoRefreshDividends() {
         ) {
 
             console.log(
-                "Backend version changed but API returned []. Keeping existing data."
+                "Backend returned []. Keeping existing data."
             );
 
 
@@ -2257,112 +2542,42 @@ async function autoRefreshDividends() {
         }
 
 
-        /* =================================================
-           CHANGED + RECORDS
-           =================================================
-         *
-         * IMPORTANT:
-         *
-         * Remember the ACTUAL currently open
-         * Stock Performance panel BEFORE
-         * sortStocks() destroys and recreates
-         * the dividend cards.
-         */
-
         const openStockPerformanceState =
             getOpenStockPerformanceState();
 
-
-        /*
-         * Replace dividend data.
-         */
 
         dividendData =
             data;
 
 
-        /*
-         * Confirm latest version.
-         */
-
-        let confirmedVersion =
-            backendVersion;
-
-
-        try {
-
-            confirmedVersion =
-                await getBackendVersion();
-
-        } catch (versionError) {
-
-            console.warn(
-                "Unable to confirm dividend version:",
-                versionError
-            );
-        }
+        loadedRange =
+            range;
 
 
         currentDataVersion =
-            confirmedVersion;
+            metaVersion(data);
 
-
-        /*
-         * Save successful data.
-         */
 
         saveLastSuccessfulDividendData(
             data,
-            confirmedVersion
+            currentDataVersion
         );
 
 
-        /*
-         * Preserve:
-         *
-         * - currentSort
-         * - currentInvestment
-         * - favorites
-         * - currentPage
-         */
-
         sortStocks();
 
-
-        /*
-         * =================================================
-         * RESTORE EXISTING STOCK PERFORMANCE PANEL
-         * =================================================
-         *
-         * IMPORTANT:
-         *
-         * DO NOT call:
-         *
-         * openStockDetails()
-         *
-         * because that would trigger:
-         *
-         * /api/stock-details?symbol=...&period=5Y
-         *
-         * again.
-         *
-         * Instead we move the existing DOM panel.
-         */
 
         restoreStockPerformanceAfterRefresh(
             openStockPerformanceState
         );
 
+
+        refreshWindowCache();
+
     } catch (e) {
 
-        /*
-         * Automatic refresh errors remain silent.
-         *
-         * Existing data remains visible.
-         */
-
         console.warn(
-            "Automatic dividend version check failed:",
+            "Automatic dividend refresh failed:",
             e
         );
 
@@ -2370,6 +2585,21 @@ async function autoRefreshDividends() {
 
         autoRefreshing =
             false;
+
+
+        if (pendingForcedRefresh) {
+
+            pendingForcedRefresh =
+                false;
+
+
+            setTimeout(
+                function() {
+                    autoRefreshDividends(true);
+                },
+                0
+            );
+        }
     }
 }
 
@@ -3694,7 +3924,7 @@ async function refreshDividends() {
 
     try {
 
-        await searchDividends();
+        await searchDividends(true);
 
     } finally {
 
