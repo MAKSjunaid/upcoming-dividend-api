@@ -1334,7 +1334,7 @@ async function fetchDividendData(
    - While the live connection is open, the 5-second timer
      only does a safety check once a minute.
 
-   - The page keeps the server's full 31-day window in
+   - The page keeps the server's full 90-day window in
      memory, so Search inside that window is instant
      (no network request at all).
    ========================================================= */
@@ -1429,7 +1429,7 @@ function inputValueToTime(value) {
 
 /*
  * Same window the server keeps in memory:
- * today .. tomorrow + 30 days.
+ * today .. tomorrow + 90 days.
  */
 function getServerWindow() {
 
@@ -1440,7 +1440,7 @@ function getServerWindow() {
         new Date();
 
     end.setDate(
-        end.getDate() + 31
+        end.getDate() + 91
     );
 
     return {
@@ -2185,7 +2185,7 @@ async function searchDividends(forceNetwork) {
 
     /*
      * INSTANT: the page already holds this range (same range,
-     * only the investment changed, or inside the 31-day
+     * only the investment changed, or inside the 90-day
      * window). No network request, no loading screen.
      *
      * Pull-to-refresh passes forceNetwork = true.
