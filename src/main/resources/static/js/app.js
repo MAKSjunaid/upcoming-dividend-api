@@ -1331,8 +1331,8 @@ async function fetchDividendData(
      the moment prices or dividends change, so the page
      updates instantly instead of polling every 5 seconds.
 
-   - While the live connection is open, the 5-second timer
-     only does a safety check once a minute.
+   - No /version polling: the live connection carries a
+     heartbeat, and a local watchdog reconnects it if needed.
 
    - The page keeps the server's full 90-day window in
      memory, so Search inside that window is instant
@@ -1617,17 +1617,68 @@ function getInstantData(range) {
 
 
 /* =========================================================
-   LIVE STREAM (Server-Sent Events)
+   LIVE STREAM (Server-Sent Events) - the ONLY update channel
+   =========================================================
+
+   One connection per open page. The server sends:
+     - "status" when data changes (and once on connect)
+     - "ping"   every 25 seconds, carrying the current
+                data version
+
+   No /version calls are made by the page. A local watchdog
+   (no network) reconnects the stream if it goes silent,
+   e.g. after a phone slept or the server restarted. On
+   reconnect the server sends "status" immediately, so any
+   missed change is downloaded once.
    ========================================================= */
+
+const STREAM_SILENCE_LIMIT_MS =
+    60 * 1000;
+
+const STREAM_FRESH_MS =
+    35 * 1000;
+
+let lastStreamEventAt = 0;
+
+
+function streamIsHealthy(limitMs) {
+
+    return liveStream !== null &&
+        liveStream.readyState !== 2 &&
+        lastStreamEventAt > 0 &&
+        Date.now() - lastStreamEventAt < limitMs;
+}
+
+
+function handleServerVersion(version) {
+
+    if (
+        version === undefined ||
+        version === null
+    ) {
+        return;
+    }
+
+    latestServerVersion =
+        String(version);
+
+    if (
+        latestServerVersion !== currentDataVersion
+    ) {
+        autoRefreshDividends(true);
+    }
+}
+
 
 function startLiveStream() {
 
+    if (!window.EventSource) {
+        return;
+    }
+
     if (
-        !window.EventSource ||
-        (
-            liveStream &&
-            liveStream.readyState !== 2
-        )
+        liveStream &&
+        liveStream.readyState !== 2
     ) {
         return;
     }
@@ -1640,6 +1691,7 @@ function startLiveStream() {
     liveStream.onopen =
         function() {
             liveStreamConnected = true;
+            lastStreamEventAt = Date.now();
         };
 
     liveStream.onerror =
@@ -1652,9 +1704,7 @@ function startLiveStream() {
         function(event) {
 
             liveStreamConnected = true;
-
-            lastVersionCheckAt =
-                Date.now();
+            lastStreamEventAt = Date.now();
 
             let status;
 
@@ -1665,29 +1715,69 @@ function startLiveStream() {
                 return;
             }
 
-            if (
-                status.version !== undefined &&
-                status.version !== null
-            ) {
+            handleServerVersion(
+                status.version
+            );
+        }
+    );
 
-                latestServerVersion =
-                    String(status.version);
+    liveStream.addEventListener(
+        "ping",
+        function(event) {
 
+            liveStreamConnected = true;
+            lastStreamEventAt = Date.now();
 
-                if (
-                    latestServerVersion !== currentDataVersion
-                ) {
-                    autoRefreshDividends(true);
-                }
-            }
+            handleServerVersion(
+                event.data
+            );
         }
     );
 }
 
 
+function restartLiveStream() {
+
+    if (liveStream) {
+        try {
+            liveStream.close();
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    liveStream = null;
+    liveStreamConnected = false;
+    lastStreamEventAt = 0;
+
+    startLiveStream();
+}
+
+
 /*
- * Phones close background connections: reconnect when the
- * page becomes visible again and check for changes.
+ * Watchdog: runs locally, makes no request. Reconnects the
+ * stream only if it has gone silent.
+ */
+function checkLiveStream(limitMs) {
+
+    if (initialLoad) {
+        return;
+    }
+
+    if (!window.EventSource) {
+        return;
+    }
+
+    if (!streamIsHealthy(limitMs)) {
+        restartLiveStream();
+    }
+}
+
+
+/*
+ * Back to the tab / app: nothing is requested while the
+ * stream is healthy. If the phone dropped the connection,
+ * only the stream reconnects.
  */
 document.addEventListener(
     "visibilitychange",
@@ -1697,22 +1787,11 @@ document.addEventListener(
             return;
         }
 
-        if (
-            !liveStream ||
-            liveStream.readyState === 2
-        ) {
-            liveStreamConnected = false;
-            startLiveStream();
-        }
-
-        /*
-         * Only the tiny version check; data is downloaded
-         * only if something changed while the tab was hidden.
-         */
-        autoRefreshDividends(false, true);
+        checkLiveStream(
+            STREAM_FRESH_MS
+        );
     }
 );
-
 
 
 /* =========================================================
@@ -2576,6 +2655,14 @@ async function autoRefreshDividends(force, checkNow) {
 
         if (!force) {
 
+            /*
+             * Only used by very old browsers without live
+             * updates (EventSource).
+             */
+            if (window.EventSource) {
+                return;
+            }
+
             const backendVersion =
                 await getBackendVersion();
 
@@ -2695,10 +2782,31 @@ function startAutomaticRefresh() {
     }
 
 
+    /*
+     * Modern browsers: local watchdog only (no request).
+     * Very old browsers without EventSource: version check
+     * once a minute.
+     */
     autoRefreshTimer =
         setInterval(
-            autoRefreshDividends,
-            AUTO_REFRESH_INTERVAL
+            function() {
+
+                if (window.EventSource) {
+
+                    if (document.visibilityState === "visible") {
+                        checkLiveStream(
+                            STREAM_SILENCE_LIMIT_MS
+                        );
+                    }
+
+                    return;
+                }
+
+                autoRefreshDividends(false, true);
+            },
+            window.EventSource
+                ? 10 * 1000
+                : 60 * 1000
         );
 }
 
@@ -3980,27 +4088,45 @@ document.addEventListener(
  */
 async function pullRefreshCheck() {
 
-    try {
+    if (!initialDataReady) {
+        await searchDividends(true);
+        return;
+    }
 
-        const backendVersion =
-            await getBackendVersion();
+    if (window.EventSource) {
 
-
-        if (
-            initialDataReady &&
-            backendVersion === currentDataVersion
-        ) {
+        /*
+         * Stream healthy: the page already has the latest
+         * data, nothing to request.
+         */
+        if (streamIsHealthy(STREAM_FRESH_MS)) {
             return;
         }
 
-    } catch (e) {
+        /*
+         * Stream dropped: reconnect it. The server answers
+         * with the current version and the page downloads
+         * only if something changed.
+         */
+        restartLiveStream();
 
-        console.warn(
-            "Version check failed during pull-to-refresh:",
-            e
-        );
+        await new Promise(function(resolve) {
+            setTimeout(resolve, 600);
+        });
+
+        return;
     }
 
+    try {
+        const backendVersion =
+            await getBackendVersion();
+
+        if (backendVersion === currentDataVersion) {
+            return;
+        }
+    } catch (e) {
+        // fall through
+    }
 
     await searchDividends(true);
 }
