@@ -20,8 +20,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * "status" event ({version, pricesAsOf, marketOpen, ...}) to
  * every tab at once. The tab then fetches the new data.
  *
- * This replaces polling every 5 seconds: updates appear the
- * moment the server has them, and idle tabs cost nothing.
+ * This replaces polling: updates appear the moment the
+ * server has them, and idle tabs cost nothing. A "ping"
+ * event every 25 seconds shows the page the connection is
+ * alive.
  *
  * Browsers reconnect automatically if the connection drops.
  */
@@ -29,11 +31,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class LiveUpdates {
 
     /*
-     * Connections are recycled every 30 minutes; EventSource
-     * reconnects by itself.
+     * Long-lived connections (6 hours). Dead ones are removed
+     * when a heartbeat cannot be delivered; the browser
+     * reconnects by itself if the connection ends.
      */
     private static final long EMITTER_TIMEOUT_MILLIS =
-            30L * 60L * 1000L;
+            6L * 60L * 60L * 1000L;
 
     private static final int MAX_SUBSCRIBERS = 1000;
 
@@ -81,15 +84,20 @@ public class LiveUpdates {
     }
 
     /**
-     * Keeps proxies (Render, Nginx, etc.) from closing idle
-     * connections.
+     * "ping" event every 25 seconds, carrying the current data
+     * version. It keeps proxies (Render, Nginx) from closing
+     * idle connections, lets the page see that the connection
+     * is alive, and lets it catch any missed change, so the
+     * page never needs to call /version.
      */
-    public void heartbeat() {
+    public void heartbeat(String version) {
 
         for (SseEmitter emitter : emitters) {
             try {
                 emitter.send(
-                        SseEmitter.event().comment("ping")
+                        SseEmitter.event()
+                                .name("ping")
+                                .data(version)
                 );
             } catch (Exception e) {
                 emitters.remove(emitter);
